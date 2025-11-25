@@ -3,25 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v34.0 - 最終確定版)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v35.0 - ZIPダウンロード)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}.log-details{font-size:12px;margin-top:10px;padding:10px;background-color:#f0f0f0;border-radius:4px;white-space:pre-wrap;max-height:300px;overflow-y:auto;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v34.0 - 最終確定版)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v35.0 - ZIPダウンロード)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message success" style="display: block;">
-        <strong>【最終修正 v34.0】</strong> ログで判明したインライン・パターンに対応しました。これで全ての小節データが処理されるはずです。
+        <strong>【ZIPダウンロード v35.0】</strong> MIDIファイルとログファイルが**一つのZIPファイル**にまとめられてダウンロードされます。
     </div>
 
     <div class="controls">
         <label for="jsonFile">① UltraBox JSONファイルを選択:</label>
         <input type="file" id="jsonFile" accept=".json">
 
-        <button id="convertButton" disabled>② MIDIに変換してダウンロード</button>
+        <button id="convertButton" disabled>② MIDIに変換してZIPでダウンロード</button>
     </div>
 
     <div id="messageArea" class="message" style="display: none;"></div>
@@ -36,13 +37,13 @@
             messageArea.style.display = 'block';
         }
 
-        function downloadFile(content, fileName, mimeType) {
-            const blob = new Blob([content], { type: mimeType });
+        // --- v35.0 変更点: ZIPファイルのダウンロード処理を追加 ---
+        function downloadZip(zipContent, fileName) {
+            const blob = new Blob([zipContent], { type: "application/zip" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            const fileExtension = mimeType === "audio/midi" ? ".mid" : ".txt";
             a.href = url;
-            a.download = fileName + fileExtension;
+            a.download = fileName + '_converted.zip';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -50,7 +51,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v34.0)
+        // カスタムコンバーターロジック (v35.0 - v34.0のロジックを継続)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -129,6 +130,8 @@
                 `1小節あたりのMIDIティック: ${midiTicksPerBar}t`
             ].join('\n');
 
+            let firstErrorLogged = false; 
+
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別の MIDI トラックを作成
             for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
                 const ultraBoxChannel = channels[channelIndex];
@@ -156,7 +159,7 @@
                         // 1. 標準: 数値パターンIDの場合
                         patternIndex = rawPatternRef;
                     } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                        // 2. オブジェクト形式の場合のチェック
+                        // 2. オブジェクト形式の場合のチェック (patternIdキーなど)
                         if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
                             patternIndex = rawPatternRef.pattern; 
                         } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
@@ -165,7 +168,7 @@
                             patternIndex = rawPatternRef.id;
                         }
                         
-                        // 💡 v34.0 NEW LOGIC: インライン・パターン判定
+                        // 💡 v34.0: インライン・パターン判定
                         if (patternIndex === -1 && Array.isArray(rawPatternRef.notes)) {
                             // IDの抽出に失敗し、かつnotes配列を持っている場合、それがパターンそのもの
                             pattern = rawPatternRef;
@@ -268,11 +271,8 @@
                         // パターンが見つからない/構造が不正 (ID参照失敗とインライン判定失敗)
                         let rawDataString = "";
                          if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                            try {
-                                rawDataString = `オブジェクトの内容: ${JSON.stringify(rawPatternRef)} / キー: ${Object.keys(rawPatternRef).join(', ')}`;
-                            } catch (e) {
-                                rawDataString = "オブジェクトの文字列化中にエラーが発生しました。";
-                            }
+                            // ログが長くなりすぎるのを防ぐため、省略表示に切り替える
+                            rawDataString = `オブジェクトの内容: {notes: [...] など} / キー: ${Object.keys(rawPatternRef).join(', ')}`;
                         } else {
                             rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
                         }
@@ -354,104 +354,4 @@
                 ...writeUint16(MIDI_TICKS_PER_BEAT) 
             ];
 
-            const fullMidi = [...header, ...tempoTrackChunk];
-            trackChunks.forEach(chunk => fullMidi.push(...chunk));
-
-            return { 
-                buffer: new Uint8Array(fullMidi).buffer, 
-                noteCount: noteCount, 
-                skippedEvents: skippedEvents,
-                summary: logDetailsSummary 
-            }; 
-        }
-
-        // ----------------------------------------------------------------------
-        // イベントハンドラー (v34.0)
-        // ----------------------------------------------------------------------
-
-        document.addEventListener('DOMContentLoaded', () => {
-            const fileInput = document.getElementById('jsonFile');
-            
-            showMessage('✅ 変換機能の準備完了。JSONファイルを選択してください。', 'success');
-
-            fileInput.addEventListener('change', (e) => {
-                showMessage('', 'none');
-                convertButton.disabled = true;
-                const file = e.target.files[0];
-                
-                if (!file) return;
-
-                showMessage(`🔍 ファイル [${file.name}] の読み込みを開始しました...`, 'success'); 
-
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    try {
-                        const ultraBoxData = JSON.parse(event.target.result);
-                        
-                        if (ultraBoxData && (ultraBoxData.format === "UltraBox" || ultraBoxData.format === "BeepBox")) {
-                            convertButton.ultraBoxData = ultraBoxData;
-                            convertButton.fileName = file.name.replace(/\.json$/i, ''); 
-                            convertButton.disabled = false;
-                            showMessage(`✅ 「${file.name}」の読み込みに成功しました。変換ボタンを押してください。`, 'success');
-                        } else {
-                            throw new Error(`ファイル形式がUltraBox/BeepBoxではありません。`);
-                        }
-                    } catch (error) {
-                        showMessage(`❌ ファイル解析失敗: ${error.message}`, 'error');
-                        convertButton.ultraBoxData = null;
-                    }
-                };
-                
-                reader.readAsText(file);
-            });
-
-            convertButton.addEventListener('click', () => {
-                if (!convertButton.ultraBoxData) {
-                    showMessage('❌ 変換データがありません。ファイルを再アップロードしてください。', 'error');
-                    return;
-                }
-
-                convertButton.disabled = true;
-                showMessage('🔄 MIDIへの変換を開始しました...', 'warning');
-                
-                try {
-                    const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
-                    
-                    // ログコンテンツの作成
-                    let logContent = `${result.summary}\n\n`;
-                    logContent += `--- スキップ・空小節 詳細ログ ---\n`;
-                    logContent += `スキップ・空小節総数: ${result.skippedEvents.length}個\n\n`;
-                    logContent += result.skippedEvents.length > 0 ? result.skippedEvents.join('\n') : "【成功】パターン参照エラーや処理不能な音符データは検出されませんでした。";
-
-                    const baseFileName = convertButton.fileName;
-                    
-                    // 1. MIDIファイルのダウンロード
-                    downloadFile(result.buffer, baseFileName + '_fixed_multitrack', "audio/midi");
-                    
-                    // 2. ログファイルのダウンロード
-                    downloadFile(logContent, baseFileName + '_log', "text/plain");
-
-                    if (result.noteCount > 0) {
-                        showMessage(
-                            `🎉 変換完了！**MIDIファイルとログファイル**をダウンロードしました。(ノート総数: ${result.noteCount}個)`, 
-                            'success'
-                        );
-                    } else {
-                        showMessage(
-                            `⚠️ 変換完了。ただし、音符が一つも見つかりませんでした。(ノート総数: 0個)。ログファイルを確認してください。`, 
-                            'warning'
-                        );
-                    }
-                    
-                    convertButton.disabled = false;
-
-                } catch (error) {
-                    showMessage(`💥 変換処理中に致命的なエラーが発生しました: ${error.message}`, 'error');
-                    convertButton.disabled = false;
-                }
-            });
-        });
-    </script>
-
-</body>
-</html>
+            const fullMidi =
