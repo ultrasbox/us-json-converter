@@ -14,8 +14,8 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【ついに到達 v22.0】</strong> ノートデータは存在していましたが、音量値（ボリューム）の計算ミスによりスキップされていました。ボリュームが「0〜10」でも「0〜100」でも正確に対応するよう修正しました。
-        <br>これで音符データが読み込まれるはずです！
+        <strong>【究極の最終版 v23.0】</strong> ノートの音量データを `note.points[0].volume` から取得するように優先順位を修正しました。これですべての構造に対応完了です！
+        <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
     <div class="controls">
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v22.0)
+        // カスタムコンバーターロジック (v23.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -166,18 +166,25 @@
 
                                 if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) continue;
 
-                                // UltraBoxティックをMIDIティックに変換
+                                // UltraBoxティックを MIDIティックに変換
                                 const midiDuration = Math.round(ultraBoxDuration * tickScaleFactor);
                                 const midiStart = Math.round(ultraBoxStart * tickScaleFactor);
 
                                 if (midiDuration <= 0) continue;
 
-                                // 💡 v22.0 修正：音量（volume）が0〜100のどちらのスケールにも対応
-                                let volumeValue = note.volume;
-                                if (volumeValue === undefined || volumeValue === null) volumeValue = 10; // デフォルト値を設定
+                                // 💡 v23.0 修正：音量（volume）をpointsから取得するように変更し、両方のスケールに対応
+                                let volumeValue = 10; // デフォルト値 (0〜10スケール)
+                                if (note.points && note.points.length > 0 && typeof note.points[0].volume === 'number') {
+                                    // points配列の最初のボリューム値を優先
+                                    volumeValue = note.points[0].volume;
+                                } else if (typeof note.volume === 'number') {
+                                    // noteオブジェクトにvolumeがあればそれを使用
+                                    volumeValue = note.volume;
+                                }
                                 
+                                // volumeValueが100スケールか10スケールかを判断
                                 const maxVolume = volumeValue > 10 ? 100 : 10;
-                                // volumeが0でもMIDIの最小ベロシティ1を確保
+                                // volumeが0でもMIDIの最小ベロシティ1を確保し、最大値127を超えないようにする
                                 const velocity = Math.min(127, Math.max(1, Math.round(volumeValue * 127 / maxVolume)));
 
 
@@ -293,7 +300,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v22.0)
+        // イベントハンドラー (v23.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
