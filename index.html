@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UltraBox JSON → MIDIコンバーター</title>
     <style>
-        body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:none;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}
+        body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not(:not(.message){margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:none;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}
     </style>
 </head>
 <body>
@@ -86,6 +86,12 @@
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
+            // 💥 ここを修正！必須プロパティの存在をチェックします
+            if (!ultraBoxData || !ultraBoxData.sequence || !ultraBoxData.patterns) {
+                throw new Error("アップロードされたJSONファイルに、曲のデータ (sequence/patterns) が見つかりません。ファイルが破損しているか、UltraBoxの曲データではありません。");
+            }
+            // 修正ここまで 💥
+            
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM);
 
@@ -94,10 +100,10 @@
             
             // 🎵 ノート切断解消のための絶対ティック計算
             for (const patternIndex of ultraBoxData.sequence) {
-                if (patternIndex !== undefined) {
+                if (patternIndex !== undefined && patternIndex !== -1) { // 💡 -1 (空のパターン) もスキップ
                     const pattern = ultraBoxData.patterns[patternIndex];
                     
-                    if (pattern) {
+                    if (pattern && pattern.notes) {
                         for (const note of pattern.notes) {
                             
                             // Note On イベント
@@ -224,7 +230,7 @@
                 showMessage('🔄 MIDIへの変換を開始しました...', 'success');
                 
                 try {
-                    // 💡 メインスレッドで直接実行！
+                    // メインスレッドで直接実行！
                     const arrayBuffer = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
                     downloadMidi(arrayBuffer, convertButton.fileName);
