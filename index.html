@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v30.0)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v31.0)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}.log-details{font-size:12px;margin-top:10px;padding:10px;background-color:#f0f0f0;border-radius:4px;white-space:pre-wrap;max-height:300px;overflow-y:auto;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v30.0)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v31.0)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【最終解決 v30.0】</strong> シーケンス配列の要素が「オブジェクト」だった問題（[object Object]エラー）を修正しました。**オブジェクトの中からパターンIDを自動で抽出**し、変換を続行します。
+        <strong>【診断モード v31.0】</strong> パターンIDオブジェクトの構造を分析します。変換に失敗した場合、**エラー箇所のオブジェクトの全情報をログに出力**します。このログをコピーしてお知らせください。
     </div>
 
     <div class="controls">
@@ -53,7 +53,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v30.0)
+        // カスタムコンバーターロジック (v31.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング (省略)
@@ -153,7 +153,7 @@
                     const sourceSequence = ultraBoxChannel.patterns || sequenceToLoop;
                     const rawPatternRef = sourceSequence[barIndex]; // 小節のパターン参照データ
 
-                    let patternIndex = -1; // -1: 不正なID
+                    let patternIndex = -1; 
                     let successfulExtraction = false;
                     
                     if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
@@ -161,26 +161,34 @@
                         patternIndex = rawPatternRef;
                         successfulExtraction = true;
                     } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                        // 2. 💡 v30.0 修正: オブジェクト形式の場合のチェック
+                        // 2. オブジェクト形式の場合のチェック
                         if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
                             patternIndex = rawPatternRef.pattern; 
                             successfulExtraction = true;
-                            // skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 成功: オブジェクトからパターンID ${patternIndex} (.pattern) を抽出`);
                         } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
                             patternIndex = rawPatternRef.patternId;
                             successfulExtraction = true;
-                            // skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 成功: オブジェクトからパターンID ${patternIndex} (.patternId) を抽出`);
                         } else if (typeof rawPatternRef.id === 'number' && rawPatternRef.id >= 0) {
                             patternIndex = rawPatternRef.id;
                             successfulExtraction = true;
-                            // skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 成功: オブジェクトからパターンID ${patternIndex} (.id) を抽出`);
                         }
                     } 
                     
                     if (!successfulExtraction) {
-                        // パターンIDの抽出に失敗した場合（数値でもオブジェクトでもIDが見つからない）
-                        let reason = `パターンIDが不正な値 ${rawPatternRef} (${typeof rawPatternRef}) - IDを抽出できませんでした。`;
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: ${reason}`);
+                        // 💡 v31.0 診断ログの追加
+                        let diagLog = "";
+                        if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
+                            try {
+                                diagLog = `オブジェクトの内容: ${JSON.stringify(rawPatternRef)}\nオブジェクトのキー: ${Object.keys(rawPatternRef).join(', ')}`;
+                            } catch (e) {
+                                diagLog = "オブジェクトの文字列化中にエラーが発生しました。";
+                            }
+                        } else {
+                             diagLog = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
+                        }
+                        
+                        let reason = `パターンIDが不正な値 - IDを抽出できませんでした。`;
+                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: ${reason}\n>> 診断情報:\n${diagLog}`);
                         absoluteTick += midiTicksPerBar; 
                         continue;
                     }
@@ -366,7 +374,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v30.0)
+        // イベントハンドラー (v31.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
