@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【究極の最終版 v23.0】</strong> ノートの音量データを `note.points[0].volume` から取得するように優先順位を修正しました。これですべての構造に対応完了です！
+        <strong>【最終版 v24.0 🔥 ノート開始位置を修正！】</strong> ノートの開始位置が `note.start` ではなく、`note.points[0].tick` に記録されていた問題に対応しました。これで全てのノートが読み込まれます！
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v23.0)
+        // カスタムコンバーターロジック (v24.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -127,7 +127,7 @@
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
                 for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
                     
-                    // v21.0 修正：チャンネル固有のパターン配列がない場合、トップレベルのシーケンスを使う
+                    // チャンネル固有のパターン配列がない場合、トップレベルのシーケンスを使う
                     const sourceSequence = ultraBoxChannel.patterns || sequenceToLoop;
                     
                     const rawPatternIndex = sourceSequence[barIndex];
@@ -154,6 +154,12 @@
                                     : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
                                 if (!pitches || pitches.length === 0) continue; 
 
+                                // 💡 v24.0 修正: 開始ティックの取得
+                                let ultraBoxStart = note.start;
+                                if ((ultraBoxStart === undefined || ultraBoxStart === null) && note.points && note.points.length > 0 && typeof note.points[0].tick === 'number') {
+                                    ultraBoxStart = note.points[0].tick;
+                                }
+
                                 // 持続時間の抽出
                                 let ultraBoxDuration = 0;
                                 if (note.points && Array.isArray(note.points) && note.points.length > 0) {
@@ -162,29 +168,25 @@
                                     ultraBoxDuration = note.duration; 
                                 }
                                 
-                                const ultraBoxStart = note.start;
-
+                                // データが有効かチェック (ultraBoxStartがNaNになるのを避ける)
                                 if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) continue;
 
                                 // UltraBoxティックを MIDIティックに変換
                                 const midiDuration = Math.round(ultraBoxDuration * tickScaleFactor);
-                                const midiStart = Math.round(ultraBoxStart * tickScaleFactor);
+                                // note.points[0].tick も音符の開始位置からのオフセットなので、そのまま変換
+                                const midiStart = Math.round(ultraBoxStart * tickScaleFactor); 
 
                                 if (midiDuration <= 0) continue;
 
-                                // 💡 v23.0 修正：音量（volume）をpointsから取得するように変更し、両方のスケールに対応
-                                let volumeValue = 10; // デフォルト値 (0〜10スケール)
+                                // 💡 v23.0 修正: 音量（volume）の取得と両方のスケール対応
+                                let volumeValue = 10;
                                 if (note.points && note.points.length > 0 && typeof note.points[0].volume === 'number') {
-                                    // points配列の最初のボリューム値を優先
                                     volumeValue = note.points[0].volume;
                                 } else if (typeof note.volume === 'number') {
-                                    // noteオブジェクトにvolumeがあればそれを使用
                                     volumeValue = note.volume;
                                 }
                                 
-                                // volumeValueが100スケールか10スケールかを判断
                                 const maxVolume = volumeValue > 10 ? 100 : 10;
-                                // volumeが0でもMIDIの最小ベロシティ1を確保し、最大値127を超えないようにする
                                 const velocity = Math.min(127, Math.max(1, Math.round(volumeValue * 127 / maxVolume)));
 
 
@@ -197,7 +199,7 @@
                                         tick: absoluteTick + midiStart, 
                                         type: MIDI_NOTE_ON,
                                         pitch: pitchValue,
-                                        velocity: velocity, // 修正後のベロシティ
+                                        velocity: velocity, 
                                         channel: midiChannel 
                                     });
                                     
@@ -300,7 +302,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v23.0)
+        // イベントハンドラー (v24.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
