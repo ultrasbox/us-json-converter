@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【最後の砦 v20.0】</strong> パターンIDが「配列」ではなく「オブジェクト（連想配列）」として格納されている特殊な構造に完全に対応しました。ノート抽出の最終強化版です。
+        <strong>【究極の最終版 v21.0】</strong> チャンネル固有のパターン配列がないファイルでも、トップレベルのシーケンス配列を正しく参照できるよう修正しました。これで音符が読み込まれます！
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v20.0)
+        // カスタムコンバーターロジック (v21.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -91,7 +91,6 @@
                 ? ultraBoxData.channels 
                 : Object.values(ultraBoxData.channels || {}); 
             
-            // 💡 v20.0 修正1：patterns が配列かオブジェクトかに関わらず取得する
             const patterns = ultraBoxData.patterns || {}; 
 
             if (channels.length === 0) {
@@ -108,7 +107,7 @@
             const tickScaleFactor = MIDI_TICKS_PER_BEAT / ultraBoxTicksPerBeat; 
 
             const trackChunks = [];
-            const sequenceToLoop = ultraBoxData.sequence || []; 
+            const sequenceToLoop = ultraBoxData.sequence || []; // トップレベルのシーケンス配列
             let noteCount = 0; 
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
@@ -128,19 +127,20 @@
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
                 for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
                     
-                    const rawPatternIndex = ultraBoxChannel.patterns && ultraBoxChannel.patterns[barIndex];
+                    // 💡 v21.0 修正：チャンネル固有のパターン配列がない場合、トップレベルのシーケンスを使う
+                    const sourceSequence = ultraBoxChannel.patterns || sequenceToLoop;
                     
-                    // 💡 v20.0 修正2：patternIndexが undefined または null でないことを確認 (0は有効なID)
+                    const rawPatternIndex = sourceSequence[barIndex];
+                    
                     if (rawPatternIndex !== undefined && rawPatternIndex !== null) { 
                         const patternIndex = rawPatternIndex;
 
-                        // 💡 v20.0 修正3：patternsが配列かオブジェクトかによってアクセス方法を分岐
                         let pattern;
                         if (Array.isArray(patterns)) {
-                            // 配列の場合 (標準的なBeepBox)
+                            // patternsが配列の場合
                             pattern = patterns[patternIndex];
                         } else {
-                            // オブジェクトの場合 (お客様のファイル構造の可能性)
+                            // patternsがオブジェクトの場合
                             pattern = patterns[String(patternIndex)];
                         }
 
@@ -284,7 +284,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v20.0)
+        // イベントハンドラー (v21.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -337,11 +337,10 @@
                     
                     downloadMidi(result.buffer, convertButton.fileName);
                     
-                    // ノート数診断メッセージを表示
                     if (result.noteCount > 0) {
-                        showMessage(`🎉 MIDIファイルの生成とダウンロードを開始しました！ノート総数: ${result.noteCount}個`, 'success');
+                        showMessage(`🎉 MIDIファイルの生成とダウンロードを開始しました！(ノート総数: ${result.noteCount}個)`, 'success');
                     } else {
-                        showMessage(`⚠️ 変換は完了しましたが、音符が一つも見つかりませんでした。(ノート総数: 0個)。JSONファイルのパターンID 16に音符データが含まれているか確認してください。`, 'warning');
+                        showMessage(`⚠️ 変換は完了しましたが、音符が一つも見つかりませんでした。(ノート総数: 0個)。このJSONファイルには音符データが含まれていないようです。音符が入っているファイルで再試行してください。`, 'warning');
                     }
                     convertButton.disabled = false;
 
