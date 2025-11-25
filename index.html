@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【動作推奨環境】</strong> 軽量化、ノート切断修正、チャンネルごとのトラック分離を実装しました。データチェックのロジックも最終的に修正しました。
+        <strong>【動作推奨環境】</strong> 軽量化、ノート切断修正、チャンネルごとのトラック分離を実装しました。データチェックを最大限に柔軟化しました。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -84,21 +84,32 @@
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
-            // 💡 最終修正点: 必須プロパティが配列として存在することをチェック
-            if (!ultraBoxData || !Array.isArray(ultraBoxData.channels) || !Array.isArray(ultraBoxData.patterns)) {
-                throw new Error("アップロードしたファイルにUltraBoxの構造（channels/patterns配列）が確認できません。");
+            // 💡 最終修正点: 変換に必要なコアデータが存在するかを最小限のチェックに留める。
+            if (!ultraBoxData || !ultraBoxData.channels || !ultraBoxData.patterns) {
+                // ここで配列チェックはせず、プロパティ自体が存在するかのみをチェックする。
+                throw new Error("アップロードしたファイルにUltraBoxのコアデータ（channels/patternsプロパティ）が確認できません。");
             }
-            // 配列の長さチェックは、UltraBoxファイルの構造を信頼し、ここでは行いません。
+            
+            // channelsが配列でない可能性があるため、配列に変換またはオブジェクトとしてそのまま利用できるようにする。
+            const channels = Array.isArray(ultraBoxData.channels) 
+                ? ultraBoxData.channels 
+                : Object.values(ultraBoxData.channels || {});
+
+            if (channels.length === 0) {
+                 throw new Error("チャンネルデータが存在しないか、空です。");
+            }
+            // patternsは配列として扱う
+            const patterns = ultraBoxData.patterns || [];
             
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
 
             const trackChunks = [];
-            const sequenceToLoop = ultraBoxData.sequence || []; // sequenceがなくても空配列として処理
+            const sequenceToLoop = ultraBoxData.sequence || []; 
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
-            for (let channelIndex = 0; channelIndex < ultraBoxData.channels.length; channelIndex++) {
-                const ultraBoxChannel = ultraBoxData.channels[channelIndex];
+            for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
+                const ultraBoxChannel = channels[channelIndex];
                 const midiChannel = channelIndex % 16; 
 
                 const events = [];
@@ -112,8 +123,8 @@
                         : -1; 
                     
                     // 💡 パターンデータが存在するかチェック
-                    if (patternIndex !== -1 && ultraBoxData.patterns[patternIndex] && ultraBoxData.patterns[patternIndex].notes) {
-                        const pattern = ultraBoxData.patterns[patternIndex];
+                    if (patternIndex !== -1 && patterns[patternIndex] && patterns[patternIndex].notes) {
+                        const pattern = patterns[patternIndex];
                         
                         // ノート切断解消のための Note On/Off イベント分離
                         for (const note of pattern.notes) {
@@ -243,6 +254,7 @@
                     try {
                         const ultraBoxData = JSON.parse(event.target.result);
                         
+                        // 💡 読み込み成功後に、UltraBox/BeepBoxフォーマットであることを確認する
                         if (ultraBoxData && (ultraBoxData.format === "UltraBox" || ultraBoxData.format === "BeepBox")) {
                             convertButton.ultraBoxData = ultraBoxData;
                             convertButton.fileName = file.name.replace(/\.json$/i, ''); 
