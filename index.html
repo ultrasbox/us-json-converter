@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーターv7</title>
+    <title>UltraBox JSON → MIDIコンバーター</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:none;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーターv7</h1>
+    <h1>UltraBox JSON → MIDIコンバーター</h1>
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【最終修正版】</strong> ノート切断修正、トラック分離、そしてファイル読み込みの柔軟性を最大限に高めました。
+        <strong>【データ完全防御版 v9.0】</strong> チャンネルとパターンデータの両方に対し、データ形式の揺らぎを完全に吸収する修正を行いました。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (RAM負荷ゼロ, ノート切断解消, マルチトラック)
+        // カスタムコンバーターロジック (v9.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -84,28 +84,26 @@
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
-            // 💡 修正点: データ検証を最小限に留め、データ処理側で柔軟に対応する
             if (!ultraBoxData) {
-                throw new Error("JSONデータが空です。");
+                throw new Error("JSONデータが空です。ファイルを再アップロードしてください。");
             }
             
-            // channelsプロパティが存在しない場合は空のオブジェクトを渡し、Object.valuesで空配列にする
-            // channelsが配列でない（数字キーのオブジェクトなど）場合も、Object.valuesで安全に配列に変換する
+            // 💡 修正点1: channelsがオブジェクト形式でも配列形式でも、安全に配列として取得する
             const channels = Array.isArray(ultraBoxData.channels) 
                 ? ultraBoxData.channels 
-                : Object.values(ultraBoxData.channels || {});
+                : Object.values(ultraBoxData.channels || {}); 
+            
+            // 💡 修正点2: patternsにも同様の防御策を適用する (v9.0の核となる修正)
+            const patterns = Array.isArray(ultraBoxData.patterns) 
+                ? ultraBoxData.patterns 
+                : Object.values(ultraBoxData.patterns || {}); 
 
             if (channels.length === 0) {
                  throw new Error("変換できるチャンネルデータ（楽器トラック）がファイル内に見つからないか、データが空です。");
             }
-            
-            // patternsも同様に、存在しない場合は空配列として扱う
-            const patterns = ultraBoxData.patterns || [];
             if (patterns.length === 0) {
-                // パターンが一つもないファイルはMIDIに変換しても意味がない
                  throw new Error("曲のパターンデータが見つからないか、データが空です。");
             }
-            // 修正ここまで 💡
             
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
@@ -237,7 +235,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (変更なし)
+        // イベントハンドラー 
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -277,7 +275,10 @@
             });
 
             convertButton.addEventListener('click', () => {
-                if (!convertButton.ultraBoxData) return showMessage('❌ 変換データがありません。', 'error');
+                if (!convertButton.ultraBoxData) {
+                    showMessage('❌ 変換データがありません。ファイルを再アップロードしてください。', 'error');
+                    return;
+                }
 
                 convertButton.disabled = true;
                 showMessage('🔄 MIDIへの変換を開始しました...', 'success');
