@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v27.0)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v28.0)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}.log-details{font-size:12px;margin-top:10px;padding:10px;background-color:#f0f0f0;border-radius:4px;white-space:pre-wrap;max-height:300px;overflow-y:auto;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v27.0)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v28.0)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【最終究明版 v27.0】</strong> 「ノート総数：0個、スキップ：0個」の原因を特定するため、**空のパターンや不正なパターンIDの参照**を詳細にログ出力します。表示されたログの内容をお知らせください。
+        <strong>【最終確認版 v28.0】</strong> 変換が「0ノート」になる根本原因を特定するため、**チャンネル数とシーケンス（小節）の長さを強制的にチェック**します。クラッシュするか、**チェック結果のログ**が表示されるか、どちらになるかをお知らせください。
     </div>
 
     <div class="controls">
@@ -33,7 +33,7 @@
         function showMessage(text, type, logDetails = '') {
             let htmlContent = `<span>${text}</span>`;
             if (logDetails) {
-                htmlContent += `<div class="log-details">--- スキップ・空小節 詳細ログ ---\n${logDetails}</div>`;
+                htmlContent += `<div class="log-details">--- 情報ログ ---\n${logDetails}</div>`;
             }
             messageArea.innerHTML = htmlContent;
             messageArea.className = `message ${type}`;
@@ -53,7 +53,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v27.0)
+        // カスタムコンバーターロジック (v28.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング (省略)
@@ -90,15 +90,26 @@
                 throw new Error("JSONデータが空です。ファイルを再アップロードしてください。");
             }
             
+            // チャンネルデータの取得
             const channels = Array.isArray(ultraBoxData.channels) 
                 ? ultraBoxData.channels 
                 : Object.values(ultraBoxData.channels || {}); 
             
+            // パターンデータの取得
             const patterns = ultraBoxData.patterns || {}; 
 
+            // シーケンスデータの取得
+            const sequenceToLoop = ultraBoxData.sequence || []; 
+
+            // 💡 v28.0 最初のチェック：データ構造の検証
             if (channels.length === 0) {
-                 throw new Error("変換できるチャンネルデータ（楽器トラック）がファイル内に見つからないか、データが空です。");
+                 throw new Error("データ構造エラー: チャンネルデータ ('channels') が見つからないか、空です。");
             }
+            if (sequenceToLoop.length === 0) {
+                 throw new Error("データ構造エラー: シーケンスデータ ('sequence') が見つからないか、空です。曲の小節数が設定されていません。");
+            }
+
+            // --- 以降、正常なデータ処理 ---
             
             const tempoBPM = ultraBoxData.beatsPerMinute || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
@@ -110,9 +121,14 @@
             const tickScaleFactor = MIDI_TICKS_PER_BEAT / ultraBoxTicksPerBeat; 
 
             const trackChunks = [];
-            const sequenceToLoop = ultraBoxData.sequence || []; 
             let noteCount = 0; 
-            let skippedEvents = []; // ログ名を変更し、音符以外のスキップも記録
+            let skippedEvents = []; 
+            let logDetailsSummary = [
+                `トラック数: ${channels.length}個`,
+                `小節ループ数: ${sequenceToLoop.length}回`,
+                `1小節あたりのMIDIティック: ${midiTicksPerBar}t`
+            ].join('\n');
+
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別の MIDI トラックを作成
             for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
@@ -135,16 +151,15 @@
                     const rawPatternIndex = sourceSequence[barIndex];
                     let patternIndex = rawPatternIndex;
                     
-                    // 💡 v27.0: パターンIDのチェックを強化
+                    // パターンIDのチェック
                     if (typeof rawPatternIndex !== 'number' || rawPatternIndex < 0 || !Number.isInteger(rawPatternIndex)) {
                         let reason = `パターンIDが不正な値 ${rawPatternIndex} (${typeof rawPatternIndex})`;
                         if (rawPatternIndex === undefined || rawPatternIndex === null) {
                             reason = "パターンIDが定義されていません (空の小節)";
                         } else if (typeof rawPatternIndex === 'string') {
-                            // 文字列の場合、数値として解釈を試みる（一部の古い形式に対応）
                             const numIndex = parseInt(rawPatternIndex, 10);
                             if (Number.isInteger(numIndex) && numIndex >= 0) {
-                                patternIndex = numIndex; // 成功した場合は続行
+                                patternIndex = numIndex; 
                             } else {
                                 skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: ${reason}`);
                                 absoluteTick += midiTicksPerBar; 
@@ -174,7 +189,7 @@
 
                         for (let noteIndex = 0; noteIndex < pattern.notes.length; noteIndex++) {
                             const note = pattern.notes[noteIndex];
-
+                            // ... (音符の処理はv27.0と同じ) ...
                             // 音高の抽出
                             const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
                                 ? note.pitches 
@@ -217,7 +232,7 @@
                                 continue;
                             }
 
-                            // 音量（volume）の取得と両方のスケール対応
+                            // 音量（volume）の取得
                             let volumeValue = 10;
                             if (pointsValid && typeof note.points[0].volume === 'number') {
                                 volumeValue = note.points[0].volume;
@@ -327,11 +342,16 @@
             const fullMidi = [...header, ...tempoTrackChunk];
             trackChunks.forEach(chunk => fullMidi.push(...chunk));
 
-            return { buffer: new Uint8Array(fullMidi).buffer, noteCount: noteCount, skippedEvents: skippedEvents }; 
+            return { 
+                buffer: new Uint8Array(fullMidi).buffer, 
+                noteCount: noteCount, 
+                skippedEvents: skippedEvents,
+                summary: logDetailsSummary 
+            }; 
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v27.0)
+        // イベントハンドラー (v28.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -381,27 +401,27 @@
                 
                 try {
                     const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
-                    // スキップされたイベントのログを詳細に表示
                     const logDetails = result.skippedEvents.length > 0 ? result.skippedEvents.join('\n') : "なし";
                     
-                    // ダウンロードは成功時にのみ実行
                     if (result.noteCount > 0) {
                         downloadMidi(result.buffer, convertButton.fileName);
                         showMessage(
                             `🎉 MIDIファイルの生成とダウンロードを開始しました！(ノート総数: ${result.noteCount}個)`, 
                             'success', 
-                            `スキップ・空小節総数: ${result.skippedEvents.length}個\n\n${logDetails}`
+                            `${result.summary}\n\n--- スキップ・空小節 詳細ログ ---\nスキップ・空小節総数: ${result.skippedEvents.length}個\n${logDetails}`
                         );
                     } else {
+                        // エラーではなく、結果としてノートが0だった場合
                         showMessage(
                             `⚠️ 変換は完了しましたが、音符が一つも見つかりませんでした。(ノート総数: 0個)。`, 
                             'warning', 
-                            `スキップ・空小節総数: ${result.skippedEvents.length}個\n\n${logDetails}`
+                            `${result.summary}\n\n--- スキップ・空小節 詳細ログ ---\nスキップ・空小節総数: ${result.skippedEvents.length}個\n${logDetails}`
                         );
                     }
                     convertButton.disabled = false;
 
                 } catch (error) {
+                    // データ構造エラー（channels/sequenceが空の場合など）はこちらで表示
                     showMessage(`💥 変換処理中にエラーが発生しました: ${error.message}`, 'error');
                     convertButton.disabled = false;
                 }
