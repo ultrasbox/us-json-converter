@@ -14,8 +14,8 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【究極の最終版 v21.0】</strong> チャンネル固有のパターン配列がないファイルでも、トップレベルのシーケンス配列を正しく参照できるよう修正しました。これで音符が読み込まれます！
-        <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
+        <strong>【ついに到達 v22.0】</strong> ノートデータは存在していましたが、音量値（ボリューム）の計算ミスによりスキップされていました。ボリュームが「0〜10」でも「0〜100」でも正確に対応するよう修正しました。
+        <br>これで音符データが読み込まれるはずです！
     </div>
 
     <div class="controls">
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v21.0)
+        // カスタムコンバーターロジック (v22.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -107,7 +107,7 @@
             const tickScaleFactor = MIDI_TICKS_PER_BEAT / ultraBoxTicksPerBeat; 
 
             const trackChunks = [];
-            const sequenceToLoop = ultraBoxData.sequence || []; // トップレベルのシーケンス配列
+            const sequenceToLoop = ultraBoxData.sequence || []; 
             let noteCount = 0; 
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
@@ -127,7 +127,7 @@
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
                 for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
                     
-                    // 💡 v21.0 修正：チャンネル固有のパターン配列がない場合、トップレベルのシーケンスを使う
+                    // v21.0 修正：チャンネル固有のパターン配列がない場合、トップレベルのシーケンスを使う
                     const sourceSequence = ultraBoxChannel.patterns || sequenceToLoop;
                     
                     const rawPatternIndex = sourceSequence[barIndex];
@@ -172,6 +172,15 @@
 
                                 if (midiDuration <= 0) continue;
 
+                                // 💡 v22.0 修正：音量（volume）が0〜100のどちらのスケールにも対応
+                                let volumeValue = note.volume;
+                                if (volumeValue === undefined || volumeValue === null) volumeValue = 10; // デフォルト値を設定
+                                
+                                const maxVolume = volumeValue > 10 ? 100 : 10;
+                                // volumeが0でもMIDIの最小ベロシティ1を確保
+                                const velocity = Math.min(127, Math.max(1, Math.round(volumeValue * 127 / maxVolume)));
+
+
                                 for (const pitchValue of pitches) {
                                     
                                     if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) continue;
@@ -181,7 +190,7 @@
                                         tick: absoluteTick + midiStart, 
                                         type: MIDI_NOTE_ON,
                                         pitch: pitchValue,
-                                        velocity: Math.round((note.volume + 1) * 127 / 10), 
+                                        velocity: velocity, // 修正後のベロシティ
                                         channel: midiChannel 
                                     });
                                     
@@ -284,7 +293,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v21.0)
+        // イベントハンドラー (v22.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
