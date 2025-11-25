@@ -132,7 +132,7 @@
                 
                 reader.readAsText(file);
             });
-
+setTimeout(initWorker, 100);
             convertButton.addEventListener('click', () => {
                 if (!coreLoaded || !convertButton.ultraBoxData) return showMessage('❌ 変換機能がロードされていません。', 'error');
 
