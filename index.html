@@ -10,11 +10,11 @@
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーターv6</h1>
+    <h1>UltraBox JSON → MIDIコンバーター</h1>
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【動作推奨環境】</strong> 軽量化、ノート切断修正、チャンネルごとのトラック分離を実装しました。データチェックを最大限に柔軟化しました。
+        <strong>【最終修正版】</strong> ノート切断修正、トラック分離、そしてファイル読み込みの柔軟性を最大限に高めました。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -84,22 +84,28 @@
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
-            // 💡 最終修正点: 変換に必要なコアデータが存在するかを最小限のチェックに留める。
-            if (!ultraBoxData || !ultraBoxData.channels || !ultraBoxData.patterns) {
-                // ここで配列チェックはせず、プロパティ自体が存在するかのみをチェックする。
-                throw new Error("アップロードしたファイルにUltraBoxのコアデータ（channels/patternsプロパティ）が確認できません。");
+            // 💡 修正点: データ検証を最小限に留め、データ処理側で柔軟に対応する
+            if (!ultraBoxData) {
+                throw new Error("JSONデータが空です。");
             }
             
-            // channelsが配列でない可能性があるため、配列に変換またはオブジェクトとしてそのまま利用できるようにする。
+            // channelsプロパティが存在しない場合は空のオブジェクトを渡し、Object.valuesで空配列にする
+            // channelsが配列でない（数字キーのオブジェクトなど）場合も、Object.valuesで安全に配列に変換する
             const channels = Array.isArray(ultraBoxData.channels) 
                 ? ultraBoxData.channels 
                 : Object.values(ultraBoxData.channels || {});
 
             if (channels.length === 0) {
-                 throw new Error("チャンネルデータが存在しないか、空です。");
+                 throw new Error("変換できるチャンネルデータ（楽器トラック）がファイル内に見つからないか、データが空です。");
             }
-            // patternsは配列として扱う
+            
+            // patternsも同様に、存在しない場合は空配列として扱う
             const patterns = ultraBoxData.patterns || [];
+            if (patterns.length === 0) {
+                // パターンが一つもないファイルはMIDIに変換しても意味がない
+                 throw new Error("曲のパターンデータが見つからないか、データが空です。");
+            }
+            // 修正ここまで 💡
             
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
@@ -122,7 +128,6 @@
                         ? ultraBoxChannel.patterns[barIndex]
                         : -1; 
                     
-                    // 💡 パターンデータが存在するかチェック
                     if (patternIndex !== -1 && patterns[patternIndex] && patterns[patternIndex].notes) {
                         const pattern = patterns[patternIndex];
                         
@@ -232,7 +237,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー
+        // イベントハンドラー (変更なし)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -254,7 +259,6 @@
                     try {
                         const ultraBoxData = JSON.parse(event.target.result);
                         
-                        // 💡 読み込み成功後に、UltraBox/BeepBoxフォーマットであることを確認する
                         if (ultraBoxData && (ultraBoxData.format === "UltraBox" || ultraBoxData.format === "BeepBox")) {
                             convertButton.ultraBoxData = ultraBoxData;
                             convertButton.fileName = file.name.replace(/\.json$/i, ''); 
