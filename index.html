@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v37.0 - 最速モード)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v38.0 - 最終ダウンロード対策)</title>
     <style>
-        body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}.log-details{font-size:12px;margin-top:10px;padding:10px;background-color:#f0f0f0;border-radius:4px;white-space:pre-wrap;max-height:300px;overflow-y:auto;}
+        body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v37.0 - 最速モード)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v38.0 - 最終ダウンロード対策)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
-    <div class="message success" style="display: block;">
-        <strong>【最速モード v37.0】</strong> 処理の重いソートを最適化しました。クラッシュ防止を目指します。
+    <div class="message warning" style="display: block;">
+        <strong>【最終ダウンロード対策 v38.0】</strong> Chromeでの失敗を防ぐため、MIDIファイルは自動ダウンロード、ログファイルは**ボタンをクリック**して手動でダウンロードしてください。
     </div>
 
     <div class="controls">
@@ -25,15 +25,21 @@
     </div>
 
     <div id="messageArea" class="message" style="display: none;"></div>
+    <div id="logDownloadContainer"></div>
 
     <script>
         const convertButton = document.getElementById('convertButton');
         const messageArea = document.getElementById('messageArea');
+        const logDownloadContainer = document.getElementById('logDownloadContainer');
+        let logContentToDownload = null;
+        let logFileName = null;
 
-        function showMessage(text, type, logDetails = '') {
+
+        function showMessage(text, type) {
             messageArea.innerHTML = `<span>${text}</span>`;
             messageArea.className = `message ${type}`;
             messageArea.style.display = 'block';
+            logDownloadContainer.innerHTML = '';
         }
         
         function downloadFile(content, fileName, mimeType) {
@@ -48,8 +54,23 @@
             URL.revokeObjectURL(url);
         }
 
+        // --- ログダウンロードボタンの表示 ---
+        function displayLogButton(logContent, baseFileName) {
+            logFileName = baseFileName + '_log.txt';
+            logContentToDownload = logContent;
+            
+            logDownloadContainer.innerHTML = `
+                <button id="logDownloadButton" class="log-button">
+                    ログファイル (${logFileName}) をダウンロード
+                </button>
+            `;
+            document.getElementById('logDownloadButton').addEventListener('click', () => {
+                downloadFile(logContentToDownload, logFileName, "text/plain");
+            });
+        }
+
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v37.0 - ソート最適化)
+        // カスタムコンバーターロジック (v38.0 - v37.0のロジックを継続)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -125,7 +146,7 @@
                 `--- 変換サマリー ---`,
                 `トラック数: ${channels.length}個`,
                 `小節ループ数 (シーケンス長): ${sequenceToLoop.length}回`,
-                `1小節あたりのMIDIティック: ${midiTicksPerBar}t`
+                `1小節あたりの MIDIティック: ${midiTicksPerBar}t`
             ].join('\n');
 
             let firstPatternErrorLogged = false; 
@@ -154,10 +175,8 @@
                     let pattern = null;
 
                     if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
-                        // 1. 標準: 数値パターンIDの場合
                         patternIndex = rawPatternRef;
                     } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                        // 2. オブジェクト形式の場合のチェック (patternIdキーなど)
                         if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
                             patternIndex = rawPatternRef.pattern; 
                         } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
@@ -166,13 +185,11 @@
                             patternIndex = rawPatternRef.id;
                         }
                         
-                        // インライン・パターン判定
                         if (patternIndex === -1 && Array.isArray(rawPatternRef.notes)) {
                             pattern = rawPatternRef;
                         }
                     } 
                     
-                    // パターンデータのルックアップ (インラインパターンでない場合)
                     if (pattern === null && patternIndex >= 0) {
                         if (Array.isArray(patterns)) {
                             pattern = patterns[patternIndex];
@@ -193,7 +210,6 @@
                         for (let noteIndex = 0; noteIndex < pattern.notes.length; noteIndex++) {
                             const note = pattern.notes[noteIndex];
                             
-                            // 音高の抽出 (省略)
                             const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
                                 ? note.pitches 
                                 : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
@@ -202,7 +218,6 @@
                                 continue;
                             }
 
-                            // 開始ティックの取得 (省略)
                             let ultraBoxStart = note.start;
                             let pointsValid = note.points && Array.isArray(note.points) && note.points.length > 0;
                             
@@ -210,7 +225,6 @@
                                 ultraBoxStart = note.points[0].tick;
                             }
 
-                            // 持続時間の抽出 (省略)
                             let ultraBoxDuration = 0;
                             
                             if (pointsValid) {
@@ -219,14 +233,12 @@
                                 ultraBoxDuration = note.duration; 
                             }
                             
-                            // データが有効かチェック (省略)
                             if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) {
                                 let reason = `開始ティック: ${ultraBoxStart} (${typeof ultraBoxStart}), 持続時間: ${ultraBoxDuration}`;
                                 skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 開始位置または持続時間が不正 (${reason})`);
                                 continue;
                             }
 
-                            // UltraBoxティックを MIDIティックに変換 (省略)
                             const midiDuration = Math.round(ultraBoxDuration * tickScaleFactor);
                             const midiStart = Math.round(ultraBoxStart * tickScaleFactor); 
 
@@ -235,7 +247,6 @@
                                 continue;
                             }
 
-                            // 音量（volume）の取得 (省略)
                             let volumeValue = 10;
                             if (pointsValid && typeof note.points[0].volume === 'number') {
                                 volumeValue = note.points[0].volume;
@@ -265,10 +276,9 @@
                             }
                         }
                     } else {
-                        // パターンが見つからない/構造が不正 (ID参照失敗とインライン判定失敗)
+                        // パターンが見つからない/構造が不正
                         let rawDataString = "";
                          if (!firstPatternErrorLogged) { 
-                            // 💡 v37.0: JSON.stringifyを削除し、クラッシュ原因となるメモリ負荷を避ける
                             if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
                                 rawDataString = `参照キー: ${Object.keys(rawPatternRef).join(', ')}`;
                             } else {
@@ -284,11 +294,10 @@
                     absoluteTick += midiTicksPerBar; 
                 }
                 
-                // 💡 v37.0: 最適化されたソート処理
-                // イベントリストのソートは最も重い処理。ここで一度だけ実行する。
+                // 最適化されたソート処理
                 events.sort((a, b) => a.tick - b.tick);
                 
-                // 4. MIDIトラックチャンクのデータを構築 (省略)
+                // 4. MIDIトラックチャンクのデータを構築
                 const trackEvents = [];
                 let lastTick = 0;
 
@@ -333,7 +342,7 @@
                 trackChunks.push(trackChunk);
             }
             
-            // 5. テンポトラックを作成 (省略)
+            // 5. テンポトラックを作成
             const tempoTrackEvents = [];
             tempoTrackEvents.push(
                 ...writeVariableLengthQuantity(0), MIDI_META, 0x51, 0x03, 
@@ -349,7 +358,7 @@
                 ...tempoTrackEvents
             ];
 
-            // 6. ヘッダーと全トラックチャンクを結合 (省略)
+            // 6. ヘッダーと全トラックチャンクを結合
             const totalTracks = trackChunks.length + 1; 
             const header = [
                 ...writeUint32(MIDI_HEADER_CHUNK), ...writeUint32(6), 
@@ -370,7 +379,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v37.0)
+        // イベントハンドラー (v38.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -386,6 +395,7 @@
                 if (!file) return;
 
                 showMessage(`🔍 ファイル [${file.name}] の読み込みを開始しました...`, 'success'); 
+                logDownloadContainer.innerHTML = '';
 
                 const reader = new FileReader();
                 reader.onload = (event) => {
@@ -416,6 +426,7 @@
                 }
 
                 convertButton.disabled = true;
+                logDownloadContainer.innerHTML = '';
                 showMessage('🔄 MIDIへの変換を開始しました...', 'warning');
                 
                 try {
@@ -423,7 +434,7 @@
                     
                     const baseFileName = convertButton.fileName;
 
-                    // 1. MIDIファイルのダウンロード
+                    // 1. MIDIファイルのダウンロード (自動)
                     const midiFileName = baseFileName + '_fixed_multitrack.mid';
                     downloadFile(result.midiBuffer, midiFileName, "audio/midi");
                     
@@ -433,21 +444,17 @@
                     logContent += `スキップ・空小節総数: ${result.skippedEvents.length}個\n\n`;
                     logContent += result.skippedEvents.length > 0 ? result.skippedEvents.join('\n') : "【成功】パターン参照エラーや処理不能な音符データは検出されませんでした。";
 
-                    // 3. ログファイルのダウンロード
-                    const logFileName = baseFileName + '_log.txt';
-                    // ログダウンロードはMIDIダウンロードのすぐ後に実行される（連続ダウンロード）
-                    setTimeout(() => { 
-                        downloadFile(logContent, logFileName, "text/plain");
-                    }, 500); // わずかな遅延を設けて、2つのファイルが確実にダウンロードされるようにする
-
+                    // 3. ログダウンロードボタンの表示 (手動操作で確実なダウンロードを促す)
+                    displayLogButton(logContent, baseFileName); 
+                    
                     if (result.noteCount > 0) {
                         showMessage(
-                            `🎉 変換完了！**MIDIファイルとログファイル**を連続ダウンロードしました。(ノート総数: ${result.noteCount}個)`, 
+                            `🎉 変換完了！**MIDIファイル**をダウンロードしました。続けて**ログボタン**を押してください。(ノート総数: ${result.noteCount}個)`, 
                             'success'
                         );
                     } else {
                         showMessage(
-                            `⚠️ 変換完了。ただし、音符が一つも見つかりませんでした。(ノート総数: 0個)。ログファイルを確認してください。`, 
+                            `⚠️ 変換完了。ただし、音符が一つも見つかりませんでした。(ノート総数: 0個)。ログボタンを押して詳細を確認してください。`, 
                             'warning'
                         );
                     }
