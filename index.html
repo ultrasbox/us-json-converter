@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v33.0 - TXTログ)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v34.0 - 最終確定版)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}.log-details{font-size:12px;margin-top:10px;padding:10px;background-color:#f0f0f0;border-radius:4px;white-space:pre-wrap;max-height:300px;overflow-y:auto;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v33.0 - TXTログ)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v34.0 - 最終確定版)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
-    <div class="message warning" style="display: block;">
-        <strong>【TXTログ出力モード v33.0】</strong> 変換失敗時も成功時も、**診断情報を含むログをTXTファイルとして自動ダウンロード**します。ダウンロードされたTXTファイルの内容をお知らせください。
+    <div class="message success" style="display: block;">
+        <strong>【最終修正 v34.0】</strong> ログで判明したインライン・パターンに対応しました。これで全ての小節データが処理されるはずです。
     </div>
 
     <div class="controls">
@@ -31,19 +31,18 @@
         const messageArea = document.getElementById('messageArea');
 
         function showMessage(text, type, logDetails = '') {
-            // v33.0ではログは表示しないか、エラー時のみ短く表示
             messageArea.innerHTML = `<span>${text}</span>`;
             messageArea.className = `message ${type}`;
             messageArea.style.display = 'block';
         }
 
-        // --- v33.0 変更点: ログとMIDIのダウンロード処理を分離 ---
         function downloadFile(content, fileName, mimeType) {
             const blob = new Blob([content], { type: mimeType });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
+            const fileExtension = mimeType === "audio/midi" ? ".mid" : ".txt";
             a.href = url;
-            a.download = fileName;
+            a.download = fileName + fileExtension;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -51,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v33.0)
+        // カスタムコンバーターロジック (v34.0)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -130,8 +129,6 @@
                 `1小節あたりのMIDIティック: ${midiTicksPerBar}t`
             ].join('\n');
 
-            let firstErrorLogged = false; 
-
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別の MIDI トラックを作成
             for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
                 const ultraBoxChannel = channels[channelIndex];
@@ -153,65 +150,42 @@
                     const rawPatternRef = sourceSequence[barIndex]; 
 
                     let patternIndex = -1; 
-                    let successfulExtraction = false;
-                    
+                    let pattern = null;
+
                     if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
                         // 1. 標準: 数値パターンIDの場合
                         patternIndex = rawPatternRef;
-                        successfulExtraction = true;
                     } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
                         // 2. オブジェクト形式の場合のチェック
                         if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
                             patternIndex = rawPatternRef.pattern; 
-                            successfulExtraction = true;
                         } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
                             patternIndex = rawPatternRef.patternId;
-                            successfulExtraction = true;
                         } else if (typeof rawPatternRef.id === 'number' && rawPatternRef.id >= 0) {
                             patternIndex = rawPatternRef.id;
-                            successfulExtraction = true;
+                        }
+                        
+                        // 💡 v34.0 NEW LOGIC: インライン・パターン判定
+                        if (patternIndex === -1 && Array.isArray(rawPatternRef.notes)) {
+                            // IDの抽出に失敗し、かつnotes配列を持っている場合、それがパターンそのもの
+                            pattern = rawPatternRef;
                         }
                     } 
                     
-                    if (!successfulExtraction) {
-                        let reason = `パターンIDが不正な値 - IDを抽出できませんでした。`;
-                        let diagLog = "";
-                        
-                        // 💡 v33.0: 最初の1件のエラーのみ詳細ログを出力
-                        if (!firstErrorLogged) {
-                            if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                                try {
-                                    diagLog = `オブジェクトの内容: ${JSON.stringify(rawPatternRef)}\nオブジェクトのキー: ${Object.keys(rawPatternRef).join(', ')}`;
-                                } catch (e) {
-                                    diagLog = "オブジェクトの文字列化中にエラーが発生しました。";
-                                }
-                            } else {
-                                 diagLog = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
-                            }
-                            reason += "\n>> 診断情報:\n" + diagLog;
-                            firstErrorLogged = true; 
+                    // パターンデータのルックアップ (インラインパターンでない場合)
+                    if (pattern === null && patternIndex >= 0) {
+                        if (Array.isArray(patterns)) {
+                            pattern = patterns[patternIndex];
                         } else {
-                            // 2件目以降のエラーは簡略化
-                            reason = `パターンIDが不正な値 [object Object] (object) - IDを抽出できませんでした。 (Ch${channelIndex+1} Bar${barIndex+1}で省略)`;
+                            pattern = patterns[String(patternIndex)];
                         }
-                        
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: ${reason}`);
-                        absoluteTick += midiTicksPerBar; 
-                        continue;
                     }
-
-                    // パターンデータのルックアップ
-                    let pattern;
-                    if (Array.isArray(patterns)) {
-                        pattern = patterns[patternIndex];
-                    } else {
-                        pattern = patterns[String(patternIndex)];
-                    }
-
+                    
+                    // --- ノートの処理 ---
                     if (pattern && pattern.notes && Array.isArray(pattern.notes)) {
                         
                         if (pattern.notes.length === 0) {
-                            skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Ptn${patternIndex}] 理由: 参照されたパターンに音符データがありません (notes: [])`);
+                            skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 参照されたパターンに音符データがありません (notes: [])`);
                             absoluteTick += midiTicksPerBar; 
                             continue;
                         }
@@ -224,7 +198,7 @@
                                 ? note.pitches 
                                 : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
                             if (!pitches || pitches.length === 0) {
-                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Ptn${patternIndex}, Note${noteIndex}] 理由: 音高データ(pitches/pitch)が見つからない`);
+                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高データ(pitches/pitch)が見つからない`);
                                 continue;
                             }
 
@@ -248,7 +222,7 @@
                             // データが有効かチェック (省略)
                             if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) {
                                 let reason = `開始ティック: ${ultraBoxStart} (${typeof ultraBoxStart}), 持続時間: ${ultraBoxDuration}`;
-                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Ptn${patternIndex}, Note${noteIndex}] 理由: 開始位置または持続時間が不正 (${reason})`);
+                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 開始位置または持続時間が不正 (${reason})`);
                                 continue;
                             }
 
@@ -257,7 +231,7 @@
                             const midiStart = Math.round(ultraBoxStart * tickScaleFactor); 
 
                             if (midiDuration <= 0) {
-                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Ptn${patternIndex}, Note${noteIndex}] 理由: MIDI持続時間(${midiDuration}t)が0以下`);
+                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: MIDI持続時間(${midiDuration}t)が0以下`);
                                 continue;
                             }
 
@@ -276,7 +250,7 @@
                             for (const pitchValue of pitches) {
                                 
                                 if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) {
-                                    skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Ptn${patternIndex}, Note${noteIndex}] 理由: 音高(${pitchValue})がMIDI範囲外`);
+                                    skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高(${pitchValue})がMIDI範囲外`);
                                     continue;
                                 }
 
@@ -291,8 +265,19 @@
                             }
                         }
                     } else {
-                        // パターンIDは正しく抽出されたが、パターン自体が見つからない/構造が不正
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Ptn${patternIndex}] 理由: パターンオブジェクトが見つからないか、構造が不正です`);
+                        // パターンが見つからない/構造が不正 (ID参照失敗とインライン判定失敗)
+                        let rawDataString = "";
+                         if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
+                            try {
+                                rawDataString = `オブジェクトの内容: ${JSON.stringify(rawPatternRef)} / キー: ${Object.keys(rawPatternRef).join(', ')}`;
+                            } catch (e) {
+                                rawDataString = "オブジェクトの文字列化中にエラーが発生しました。";
+                            }
+                        } else {
+                            rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
+                        }
+                        
+                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: パターンデータの取得に失敗 (ID: ${patternIndex})\n>> 診断情報:\n${rawDataString}`);
                     }
                     absoluteTick += midiTicksPerBar; 
                 }
@@ -381,7 +366,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v33.0)
+        // イベントハンドラー (v34.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -436,20 +421,27 @@
                     let logContent = `${result.summary}\n\n`;
                     logContent += `--- スキップ・空小節 詳細ログ ---\n`;
                     logContent += `スキップ・空小節総数: ${result.skippedEvents.length}個\n\n`;
-                    logContent += result.skippedEvents.length > 0 ? result.skippedEvents.join('\n') : "【成功】パターン参照エラーは検出されませんでした。\n(ただし、パターン自体が空の場合のスキップはここに含まれます)";
+                    logContent += result.skippedEvents.length > 0 ? result.skippedEvents.join('\n') : "【成功】パターン参照エラーや処理不能な音符データは検出されませんでした。";
 
+                    const baseFileName = convertButton.fileName;
+                    
                     // 1. MIDIファイルのダウンロード
-                    const midiFileName = convertButton.fileName + '_fixed_multitrack.mid';
-                    downloadFile(result.buffer, midiFileName, "audio/midi");
+                    downloadFile(result.buffer, baseFileName + '_fixed_multitrack', "audio/midi");
                     
                     // 2. ログファイルのダウンロード
-                    const logFileName = convertButton.fileName + '_log.txt';
-                    downloadFile(logContent, logFileName, "text/plain");
+                    downloadFile(logContent, baseFileName + '_log', "text/plain");
 
-                    showMessage(
-                        `🎉 変換完了！**「${midiFileName}」** と **「${logFileName}」** をダウンロードしました。TXTログの内容をお知らせください。`, 
-                        'success'
-                    );
+                    if (result.noteCount > 0) {
+                        showMessage(
+                            `🎉 変換完了！**MIDIファイルとログファイル**をダウンロードしました。(ノート総数: ${result.noteCount}個)`, 
+                            'success'
+                        );
+                    } else {
+                        showMessage(
+                            `⚠️ 変換完了。ただし、音符が一つも見つかりませんでした。(ノート総数: 0個)。ログファイルを確認してください。`, 
+                            'warning'
+                        );
+                    }
                     
                     convertButton.disabled = false;
 
