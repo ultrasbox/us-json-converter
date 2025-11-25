@@ -10,11 +10,11 @@
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーターv9</h1>
+    <h1>UltraBox JSON → MIDIコンバーター</h1>
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【データ完全防御版 v9.0】</strong> チャンネルとパターンデータの両方に対し、データ形式の揺らぎを完全に吸収する修正を行いました。
+        <strong>【究極の安全版 v10.0】</strong> チャンネルとパターンデータ検証を最大限に柔軟化し、無音の曲でもエラーにならないよう修正しました。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v9.0)
+        // カスタムコンバーターロジック (v10.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -93,17 +93,16 @@
                 ? ultraBoxData.channels 
                 : Object.values(ultraBoxData.channels || {}); 
             
-            // 💡 修正点2: patternsにも同様の防御策を適用する (v9.0の核となる修正)
+            // 💡 修正点2: patternsにも同様の防御策を適用する
             const patterns = Array.isArray(ultraBoxData.patterns) 
                 ? ultraBoxData.patterns 
                 : Object.values(ultraBoxData.patterns || {}); 
 
             if (channels.length === 0) {
+                 // チャンネルがなければ、MIDIトラックを作成できないため、このチェックは残す
                  throw new Error("変換できるチャンネルデータ（楽器トラック）がファイル内に見つからないか、データが空です。");
             }
-            if (patterns.length === 0) {
-                 throw new Error("曲のパターンデータが見つからないか、データが空です。");
-            }
+            // ❌ 以前のエラーの原因となっていたパターンデータが空であることのチェックを削除 ❌
             
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
@@ -126,6 +125,7 @@
                         ? ultraBoxChannel.patterns[barIndex]
                         : -1; 
                     
+                    // 💡 パターン配列が空でも、このチェックが安全にスキップしてくれる
                     if (patternIndex !== -1 && patterns[patternIndex] && patterns[patternIndex].notes) {
                         const pattern = patterns[patternIndex];
                         
