@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【真の最終版 v19.0】</strong> ノート抽出ロジックを究極に堅牢化し、**処理されたノートの総数**を表示する診断機能を追加しました。これでノートが見つからない原因が特定できます。
+        <strong>【最後の砦 v20.0】</strong> パターンIDが「配列」ではなく「オブジェクト（連想配列）」として格納されている特殊な構造に完全に対応しました。ノート抽出の最終強化版です。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v19.0)
+        // カスタムコンバーターロジック (v20.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -91,6 +91,7 @@
                 ? ultraBoxData.channels 
                 : Object.values(ultraBoxData.channels || {}); 
             
+            // 💡 v20.0 修正1：patterns が配列かオブジェクトかに関わらず取得する
             const patterns = ultraBoxData.patterns || {}; 
 
             if (channels.length === 0) {
@@ -108,18 +109,16 @@
 
             const trackChunks = [];
             const sequenceToLoop = ultraBoxData.sequence || []; 
-            let noteCount = 0; // 💡 v19.0: ノートカウントの初期化
+            let noteCount = 0; 
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
             for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
                 const ultraBoxChannel = channels[channelIndex];
                 const midiChannel = channelIndex % 16; 
 
-                // 楽器プログラム番号を取得 (GM 0-127 に収める)
                 const ultraBoxPresetId = ultraBoxChannel.instruments?.[0]?.preset;
                 const gmProgramNumber = (ultraBoxPresetId !== undefined && ultraBoxPresetId >= 0) ? ultraBoxPresetId % 128 : 0; 
                 
-                // トラック名をチャンネル名、楽器タイプ名の順で優先
                 const instrumentType = ultraBoxChannel.instruments?.[0]?.type;
                 const channelName = ultraBoxChannel.name || instrumentType || `Track ${channelIndex + 1}`;
 
@@ -129,26 +128,33 @@
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
                 for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
                     
-                    const patternIndex = (ultraBoxChannel.patterns && ultraBoxChannel.patterns[barIndex] !== undefined)
-                        ? ultraBoxChannel.patterns[barIndex]
-                        : -1; 
+                    const rawPatternIndex = ultraBoxChannel.patterns && ultraBoxChannel.patterns[barIndex];
                     
-                    if (patternIndex !== -1) { 
-                        const pattern = patterns[String(patternIndex)]; 
-                        
+                    // 💡 v20.0 修正2：patternIndexが undefined または null でないことを確認 (0は有効なID)
+                    if (rawPatternIndex !== undefined && rawPatternIndex !== null) { 
+                        const patternIndex = rawPatternIndex;
+
+                        // 💡 v20.0 修正3：patternsが配列かオブジェクトかによってアクセス方法を分岐
+                        let pattern;
+                        if (Array.isArray(patterns)) {
+                            // 配列の場合 (標準的なBeepBox)
+                            pattern = patterns[patternIndex];
+                        } else {
+                            // オブジェクトの場合 (お客様のファイル構造の可能性)
+                            pattern = patterns[String(patternIndex)];
+                        }
+
                         if (pattern && pattern.notes && Array.isArray(pattern.notes)) {
                             
                             for (const note of pattern.notes) {
                                 
-                                // 💡 v19.0: ノート抽出ロジックの究極の堅牢化
-                                
-                                // 音高の抽出 (pitchesを優先し、有効なデータがなければスキップ)
+                                // 音高の抽出
                                 const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
                                     ? note.pitches 
                                     : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
                                 if (!pitches || pitches.length === 0) continue; 
 
-                                // 持続時間の抽出 (pointsを優先)
+                                // 持続時間の抽出
                                 let ultraBoxDuration = 0;
                                 if (note.points && Array.isArray(note.points) && note.points.length > 0) {
                                     ultraBoxDuration = note.points[note.points.length - 1].tick;
@@ -156,17 +162,14 @@
                                     ultraBoxDuration = note.duration; 
                                 }
                                 
-                                // 開始位置は note.start (必須)
                                 const ultraBoxStart = note.start;
 
-                                // 開始位置がない、または持続時間がない場合はスキップ
                                 if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) continue;
 
                                 // UltraBoxティックをMIDIティックに変換
                                 const midiDuration = Math.round(ultraBoxDuration * tickScaleFactor);
                                 const midiStart = Math.round(ultraBoxStart * tickScaleFactor);
 
-                                // 変換後の持続時間が0になった場合はスキップ
                                 if (midiDuration <= 0) continue;
 
                                 for (const pitchValue of pitches) {
@@ -190,7 +193,7 @@
                                         velocity: 0, 
                                         channel: midiChannel 
                                     });
-                                    noteCount++; // 💡 v19.0: ノートカウントの増加
+                                    noteCount++; 
                                 }
                             }
                         }
@@ -215,9 +218,9 @@
                 
                 // Program Change イベントを追加 (MIDI楽器設定)
                 trackEvents.push(
-                    ...writeVariableLengthQuantity(0), // Delta time 0
-                    MIDI_PROGRAM_CHANGE | midiChannel, // Program Change event (0xC0) + MIDI Channel
-                    gmProgramNumber // GM Program Number (0-127)
+                    ...writeVariableLengthQuantity(0), 
+                    MIDI_PROGRAM_CHANGE | midiChannel, 
+                    gmProgramNumber 
                 );
 
                 // ノートイベントの書き込み
@@ -240,7 +243,6 @@
                     ...writeVariableLengthQuantity(0), MIDI_META, MIDI_END_OF_TRACK, 0x00 
                 );
                 
-                // トラックのイベント数にかかわらず、トラックチャンクを必ず追加
                 const trackSize = trackEvents.length;
                 const trackChunk = [
                     ...writeUint32(MIDI_TRACK_CHUNK), 
@@ -278,11 +280,11 @@
             const fullMidi = [...header, ...tempoTrackChunk];
             trackChunks.forEach(chunk => fullMidi.push(...chunk));
 
-            return { buffer: new Uint8Array(fullMidi).buffer, noteCount: noteCount }; // 💡 v19.0: ノート数を返す
+            return { buffer: new Uint8Array(fullMidi).buffer, noteCount: noteCount }; 
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v19.0: 診断メッセージ対応)
+        // イベントハンドラー (v20.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -335,7 +337,12 @@
                     
                     downloadMidi(result.buffer, convertButton.fileName);
                     
-                    showMessage(`🎉 MIDIファイルの生成とダウンロードを開始しました！(ノート数: ${result.noteCount}個)`, 'success'); // 💡 v19.0: ノート数を表示
+                    // ノート数診断メッセージを表示
+                    if (result.noteCount > 0) {
+                        showMessage(`🎉 MIDIファイルの生成とダウンロードを開始しました！(ノート総数: ${result.noteCount}個)`, 'success');
+                    } else {
+                        showMessage(`⚠️ 変換は完了しましたが、音符が一つも見つかりませんでした。(ノート総数: 0個)。JSONファイルのパターンID 16に音符データが含まれているか確認してください。`, 'warning');
+                    }
                     convertButton.disabled = false;
 
                 } catch (error) {
