@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【動作推奨環境】</strong> 旧世代のiPadや古い端末でも動作するよう軽量化しました。メモリ不足によるクラッシュは発生しにくくなっています。
+        <strong>【動作推奨環境】</strong> 軽量化、ノート切断修正、そして**チャンネルごとのトラック分離**を実装しました。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -42,7 +42,7 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = fileName + '_fixed.mid';
+            a.download = fileName + '_fixed_multitrack.mid';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -50,23 +50,22 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (RAM負荷ゼロ, ノート切断解消済み)
+        // カスタムコンバーターロジック (RAM負荷ゼロ, ノート切断解消, マルチトラック)
         // ----------------------------------------------------------------------
 
-        // MIDI定数とVLQエンコーディング (Midi.tsと規格から抽出)
+        // MIDI定数とVLQエンコーディング
         const MIDI_HEADER_CHUNK = 0x4D546864; 
         const MIDI_TRACK_CHUNK = 0x4D54726B; 
-        const MIDI_FORMAT_SINGLE_TRACK = 0x0000;
+        const MIDI_FORMAT_MULTI_TRACK = 0x0001; // <-- Format 1に変更
         const MIDI_NOTE_OFF = 0x80;
         const MIDI_NOTE_ON = 0x90;
         const MIDI_META = 0xFF;
         const MIDI_END_OF_TRACK = 0x2F;
+        const MIDI_CHANNEL_NAME = 0x03; // メタイベント: トラック/シーケンス名
 
-        // UltraBox/BeepBoxのConfigより
         const TICKS_PER_BEAT = 24; 
         const TICKS_PER_BAR = TICKS_PER_BEAT * 4; 
 
-        // VLQ (可変長数値) エンコーディング関数
         function writeVariableLengthQuantity(value) {
             let buffer = [];
             if (value === 0) return [0]; 
@@ -81,31 +80,43 @@
             return buffer;
         }
 
-        // 数値をバイト配列に変換するユーティリティ
         function writeUint16(value) { return [(value >> 8) & 0xFF, value & 0xFF]; }
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
-            // 💡 修正点: 必須プロパティの存在をより柔軟にチェックします
-            if (!ultraBoxData || !ultraBoxData.patterns) {
-                throw new Error("アップロードされたJSONファイルに、曲のデータ (patterns) が見つかりません。ファイルが破損しているか、UltraBoxの曲データではありません。");
+            // 💡 堅牢性チェックの強化: channels と patterns が必須
+            if (!ultraBoxData || !ultraBoxData.channels || !ultraBoxData.patterns) {
+                throw new Error("アップロードされたJSONファイルに、曲のデータ (channels/patterns) が見つかりません。ファイルが破損しているか、UltraBoxの曲データではありません。");
             }
             
             const tempoBPM = ultraBoxData.tempo || 150;
-            const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM);
+            // テンポ値（マイクロ秒/拍）
+            const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
 
-            const events = [];
-            let absoluteTick = 0;
-            
-            // 🎵 ノート切断解消のための絶対ティック計算
-            // 💡 修正点: ultraBoxData.sequence が undefined でも [] で安全にループできるように修正
-            const sequenceToLoop = ultraBoxData.sequence || []; 
+            const trackChunks = [];
+            const sequenceToLoop = ultraBoxData.sequence || []; // sequenceがなくてもクラッシュしないようにする
 
-            for (const patternIndex of sequenceToLoop) {
-                if (patternIndex !== undefined && patternIndex !== -1) { 
-                    const pattern = ultraBoxData.patterns[patternIndex];
+            // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
+            for (let channelIndex = 0; channelIndex < ultraBoxData.channels.length; channelIndex++) {
+                const ultraBoxChannel = ultraBoxData.channels[channelIndex];
+                // MIDIチャンネルは0〜15の範囲にマップ
+                const midiChannel = channelIndex % 16; 
+
+                const events = [];
+                let absoluteTick = 0;
+                
+                // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
+                for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
                     
-                    if (pattern && pattern.notes) {
+                    // UltraBox/BeepBoxの一般的な構造: チャンネルのパターン配列から、現在のバーのパターンインデックスを取得
+                    const patternIndex = (ultraBoxChannel.patterns && ultraBoxChannel.patterns[barIndex] !== undefined)
+                        ? ultraBoxChannel.patterns[barIndex]
+                        : -1; 
+                    
+                    if (patternIndex !== -1 && ultraBoxData.patterns[patternIndex] && ultraBoxData.patterns[patternIndex].notes) {
+                        const pattern = ultraBoxData.patterns[patternIndex];
+                        
+                        // ノート切断解消のための Note On/Off イベント分離
                         for (const note of pattern.notes) {
                             
                             // Note On イベント
@@ -114,80 +125,107 @@
                                 type: MIDI_NOTE_ON,
                                 pitch: note.pitch,
                                 velocity: Math.round((note.volume + 1) * 127 / 10), 
-                                channel: 0 
+                                channel: midiChannel 
                             });
                             
-                            // Note Off イベント (duration を使って正確な絶対終了時刻を計算)
+                            // Note Off イベント (正確な絶対終了時刻)
                             events.push({
                                 tick: absoluteTick + note.start + note.duration, 
                                 type: MIDI_NOTE_OFF,
                                 pitch: note.pitch,
                                 velocity: 0, 
-                                channel: 0
+                                channel: midiChannel 
                             });
                         }
                     }
+                    absoluteTick += TICKS_PER_BAR; // 次のバーの開始ティック
                 }
-                absoluteTick += TICKS_PER_BAR; 
+
+                // 3. イベントを絶対ティック順にソート
+                events.sort((a, b) => a.tick - b.tick);
+                
+                // 4. MIDIトラックチャンクのデータを構築
+                const trackEvents = [];
+                let lastTick = 0;
+
+                // チャンネル名を追加 (トラック名)
+                const channelName = ultraBoxChannel.name || `Track ${channelIndex + 1}`;
+                const nameBytes = Array.from(new TextEncoder().encode(channelName));
+
+                trackEvents.push(
+                    ...writeVariableLengthQuantity(0), MIDI_META, MIDI_CHANNEL_NAME, 
+                    ...writeVariableLengthQuantity(nameBytes.length), 
+                    ...nameBytes
+                );
+                
+                // ノートイベントの書き込み
+                for (const event of events) {
+                    const deltaTime = event.tick - lastTick;
+                    if (deltaTime < 0) throw new Error("MIDI Time Error: Negative delta time.");
+
+                    trackEvents.push(
+                        ...writeVariableLengthQuantity(deltaTime), 
+                        event.type | event.channel, 
+                        event.pitch[0], // ピッチ
+                        event.velocity 
+                    );
+
+                    lastTick = event.tick;
+                }
+
+                // トラック終端イベント
+                trackEvents.push(
+                    ...writeVariableLengthQuantity(0), MIDI_META, MIDI_END_OF_TRACK, 0x00 
+                );
+                
+                // 最終的なトラックチャンク構造
+                const trackSize = trackEvents.length;
+                const trackChunk = [
+                    ...writeUint32(MIDI_TRACK_CHUNK), 
+                    ...writeUint32(trackSize), 
+                    ...trackEvents
+                ];
+                trackChunks.push(trackChunk);
             }
-
-            // 🕒 絶対ティック順にイベントをソート (切れないノートを実現する最重要ステップ)
-            events.sort((a, b) => a.tick - b.tick);
-
-            // ----------------------------------------------------------------------
-            // MIDIバイナリの構築
-            // ----------------------------------------------------------------------
-
-            const trackEvents = [];
-            let lastTick = 0;
             
-            // 1. テンポ設定
-            trackEvents.push(
+            // 5. テンポトラック（最初のトラック）を作成
+            const tempoTrackEvents = [];
+            // テンポ設定
+            tempoTrackEvents.push(
                 ...writeVariableLengthQuantity(0), MIDI_META, 0x51, 0x03, 
                 ...writeUint32(tempoMicrosecondsPerBeat).slice(1) 
             );
-            
-            // 2. 音符イベントの書き込み
-            for (const event of events) {
-                const deltaTime = event.tick - lastTick;
-                if (deltaTime < 0) throw new Error("MIDI Time Error: Negative delta time.");
-
-                trackEvents.push(
-                    ...writeVariableLengthQuantity(deltaTime), 
-                    event.type | event.channel, 
-                    event.pitch[0], 
-                    event.velocity 
-                );
-
-                lastTick = event.tick;
-            }
-
-            // 3. トラック終端イベント
-            trackEvents.push(
+            // トラック終端
+            tempoTrackEvents.push(
                 ...writeVariableLengthQuantity(0), MIDI_META, MIDI_END_OF_TRACK, 0x00 
             );
             
-            // ヘッダーとトラックチャンクの最終結合
-            const trackSize = trackEvents.length;
-            
+            const tempoTrackChunk = [
+                ...writeUint32(MIDI_TRACK_CHUNK), 
+                ...writeUint32(tempoTrackEvents.length), 
+                ...tempoTrackEvents
+            ];
+
+            // 6. ヘッダーと全トラックチャンクを結合
+            const totalTracks = trackChunks.length + 1; // テンポトラック + 楽器トラック
             const header = [
                 ...writeUint32(MIDI_HEADER_CHUNK), ...writeUint32(6), 
-                ...writeUint16(MIDI_FORMAT_SINGLE_TRACK), ...writeUint16(1), 
+                ...writeUint16(MIDI_FORMAT_MULTI_TRACK), // Format 1
+                ...writeUint16(totalTracks), 
                 ...writeUint16(TICKS_PER_BEAT) 
             ];
 
-            const track = [
-                ...writeUint32(MIDI_TRACK_CHUNK), ...writeUint32(trackSize), 
-                ...trackEvents
-            ];
+            // テンポトラックを最初に追加し、その後に楽器トラックを追加
+            const fullMidi = [...header, ...tempoTrackChunk];
+            trackChunks.forEach(chunk => fullMidi.push(...chunk));
 
-            return new Uint8Array([...header, ...track]).buffer;
+            return new Uint8Array(fullMidi).buffer;
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー
+        // イベントハンドラー (省略)
         // ----------------------------------------------------------------------
-
+        
         document.addEventListener('DOMContentLoaded', () => {
             const fileInput = document.getElementById('jsonFile');
             
@@ -207,7 +245,13 @@
                     try {
                         const ultraBoxData = JSON.parse(event.target.result);
                         
+                        // フォーマットチェック
                         if (ultraBoxData && (ultraBoxData.format === "UltraBox" || ultraBoxData.format === "BeepBox")) {
+                            // channelsとpatternsの基本的な存在チェック
+                            if (!ultraBoxData.channels || !ultraBoxData.patterns) {
+                                throw new Error("UltraBoxファイルに必要なチャンネルまたはパターンデータが見つかりません。");
+                            }
+                            
                             convertButton.ultraBoxData = ultraBoxData;
                             convertButton.fileName = file.name.replace(/\.json$/i, ''); 
                             convertButton.disabled = false;
@@ -231,7 +275,6 @@
                 showMessage('🔄 MIDIへの変換を開始しました...', 'success');
                 
                 try {
-                    // メインスレッドで直接実行！
                     const arrayBuffer = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
                     downloadMidi(arrayBuffer, convertButton.fileName);
