@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【動作推奨環境】</strong> 軽量化、ノート切断修正、そして**チャンネルごとのトラック分離**を実装しました。
+        <strong>【動作推奨環境】</strong> 軽量化、ノート切断修正、チャンネルごとのトラック分離を実装しました。データチェックのロジックも最終的に修正しました。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -84,23 +84,17 @@
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
-            // 💡 修正点: 必須プロパティが「配列として存在し、かつ空ではないか」を厳密にチェック
-            if (!ultraBoxData) {
-                throw new Error("JSONデータが空です。");
+            // 💡 最終修正点: 必須プロパティが配列として存在することをチェック
+            if (!ultraBoxData || !Array.isArray(ultraBoxData.channels) || !Array.isArray(ultraBoxData.patterns)) {
+                throw new Error("アップロードしたファイルにUltraBoxの構造（channels/patterns配列）が確認できません。");
             }
-            if (!Array.isArray(ultraBoxData.channels) || ultraBoxData.channels.length === 0) {
-                throw new Error("曲のチャンネルデータが見つからないか、データが空です。");
-            }
-            if (!Array.isArray(ultraBoxData.patterns) || ultraBoxData.patterns.length === 0) {
-                throw new Error("曲のパターンデータが見つからないか、データが空です。");
-            }
-            // 修正ここまで 💡
+            // 配列の長さチェックは、UltraBoxファイルの構造を信頼し、ここでは行いません。
             
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
 
             const trackChunks = [];
-            const sequenceToLoop = ultraBoxData.sequence || []; 
+            const sequenceToLoop = ultraBoxData.sequence || []; // sequenceがなくても空配列として処理
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
             for (let channelIndex = 0; channelIndex < ultraBoxData.channels.length; channelIndex++) {
@@ -117,6 +111,7 @@
                         ? ultraBoxChannel.patterns[barIndex]
                         : -1; 
                     
+                    // 💡 パターンデータが存在するかチェック
                     if (patternIndex !== -1 && ultraBoxData.patterns[patternIndex] && ultraBoxData.patterns[patternIndex].notes) {
                         const pattern = ultraBoxData.patterns[patternIndex];
                         
@@ -252,13 +247,11 @@
                             convertButton.ultraBoxData = ultraBoxData;
                             convertButton.fileName = file.name.replace(/\.json$/i, ''); 
                             convertButton.disabled = false;
-                            // 💡 読み込み成功メッセージは変換前の段階で表示
                             showMessage(`✅ 「${file.name}」の読み込みに成功しました。変換ボタンを押してください。`, 'success');
                         } else {
                             throw new Error(`ファイル形式がUltraBox/BeepBoxではありません。`);
                         }
                     } catch (error) {
-                        // 読み込み・パース失敗
                         showMessage(`❌ ファイル解析失敗: ${error.message}`, 'error');
                         convertButton.ultraBoxData = null;
                     }
@@ -282,7 +275,6 @@
                     convertButton.disabled = false;
 
                 } catch (error) {
-                    // 変換処理中のエラー (データ不備など)
                     showMessage(`💥 変換処理中にエラーが発生しました: ${error.message}`, 'error');
                     convertButton.disabled = false;
                 }
