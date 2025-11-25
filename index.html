@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v28.0)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v29.0)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}.log-details{font-size:12px;margin-top:10px;padding:10px;background-color:#f0f0f0;border-radius:4px;white-space:pre-wrap;max-height:300px;overflow-y:auto;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v28.0)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v29.0)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【最終確認版 v28.0】</strong> 変換が「0ノート」になる根本原因を特定するため、**チャンネル数とシーケンス（小節）の長さを強制的にチェック**します。クラッシュするか、**チェック結果のログ**が表示されるか、どちらになるかをお知らせください。
+        <strong>【問題解決版 v29.0】</strong> ルートの `sequence` が空の場合、**最初のチャンネルのパターン情報 (patterns) を曲の小節情報として使用**するように修正しました。これにより、変換が成功するはずです。
     </div>
 
     <div class="controls">
@@ -53,7 +53,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v28.0)
+        // カスタムコンバーターロジック (v29.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング (省略)
@@ -95,18 +95,25 @@
                 ? ultraBoxData.channels 
                 : Object.values(ultraBoxData.channels || {}); 
             
-            // パターンデータの取得
-            const patterns = ultraBoxData.patterns || {}; 
-
-            // シーケンスデータの取得
-            const sequenceToLoop = ultraBoxData.sequence || []; 
-
-            // 💡 v28.0 最初のチェック：データ構造の検証
             if (channels.length === 0) {
                  throw new Error("データ構造エラー: チャンネルデータ ('channels') が見つからないか、空です。");
             }
+            
+            // パターンデータの取得
+            const patterns = ultraBoxData.patterns || {}; 
+
+            // 💡 v29.0 修正: シーケンスデータの取得を強化
+            let sequenceToLoop = ultraBoxData.sequence || []; 
             if (sequenceToLoop.length === 0) {
-                 throw new Error("データ構造エラー: シーケンスデータ ('sequence') が見つからないか、空です。曲の小節数が設定されていません。");
+                // ルートのsequenceが空の場合、最初のチャンネルのpatternsを参照する
+                const firstChannelPatterns = channels[0].patterns;
+                if (firstChannelPatterns && Array.isArray(firstChannelPatterns) && firstChannelPatterns.length > 0) {
+                    sequenceToLoop = firstChannelPatterns;
+                }
+            }
+
+            if (sequenceToLoop.length === 0) {
+                 throw new Error("データ構造エラー: シーケンスデータ ('sequence') がルートにも、最初のチャンネルにも見つからないか、空です。曲の小節数が設定されていません。");
             }
 
             // --- 以降、正常なデータ処理 ---
@@ -125,7 +132,7 @@
             let skippedEvents = []; 
             let logDetailsSummary = [
                 `トラック数: ${channels.length}個`,
-                `小節ループ数: ${sequenceToLoop.length}回`,
+                `小節ループ数 (シーケンス長): ${sequenceToLoop.length}回`,
                 `1小節あたりのMIDIティック: ${midiTicksPerBar}t`
             ].join('\n');
 
@@ -145,9 +152,16 @@
                 let absoluteTick = 0;
                 
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
+                // 💡 このループは、v29.0の修正により sequenceToLoop.length > 0 の場合にのみ実行される
                 for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
                     
+                    // 💡 注意: チャンネル内で pattern が定義されている場合、そのチャンネルのみ、
+                    //     このチャンネル自身のパターン配列をシーケンスとして使用する。
+                    //     sequenceToLoop が使われるのは、チャンネル内に pattern がない場合のみ。
                     const sourceSequence = ultraBoxChannel.patterns || sequenceToLoop;
+                    
+                    // ただし、全てのチャンネルが同じ長さの曲でなければならないため、
+                    // ここでは sequenceToLoop の長さで強制的にループを回し、各チャンネル内のパターンを取得する。
                     const rawPatternIndex = sourceSequence[barIndex];
                     let patternIndex = rawPatternIndex;
                     
@@ -189,7 +203,7 @@
 
                         for (let noteIndex = 0; noteIndex < pattern.notes.length; noteIndex++) {
                             const note = pattern.notes[noteIndex];
-                            // ... (音符の処理はv27.0と同じ) ...
+                            
                             // 音高の抽出
                             const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
                                 ? note.pitches 
@@ -351,7 +365,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v28.0)
+        // イベントハンドラー (v29.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -421,7 +435,6 @@
                     convertButton.disabled = false;
 
                 } catch (error) {
-                    // データ構造エラー（channels/sequenceが空の場合など）はこちらで表示
                     showMessage(`💥 変換処理中にエラーが発生しました: ${error.message}`, 'error');
                     convertButton.disabled = false;
                 }
