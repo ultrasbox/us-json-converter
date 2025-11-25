@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UltraBox JSON → MIDIコンバーター</title>
     <style>
-        body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not(:not(.message){margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:none;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}
+        body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:none;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}
     </style>
 </head>
 <body>
@@ -86,11 +86,10 @@
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
-            // 💥 ここを修正！必須プロパティの存在をチェックします
-            if (!ultraBoxData || !ultraBoxData.sequence || !ultraBoxData.patterns) {
-                throw new Error("アップロードされたJSONファイルに、曲のデータ (sequence/patterns) が見つかりません。ファイルが破損しているか、UltraBoxの曲データではありません。");
+            // 💡 修正点: 必須プロパティの存在をより柔軟にチェックします
+            if (!ultraBoxData || !ultraBoxData.patterns) {
+                throw new Error("アップロードされたJSONファイルに、曲のデータ (patterns) が見つかりません。ファイルが破損しているか、UltraBoxの曲データではありません。");
             }
-            // 修正ここまで 💥
             
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM);
@@ -99,8 +98,11 @@
             let absoluteTick = 0;
             
             // 🎵 ノート切断解消のための絶対ティック計算
-            for (const patternIndex of ultraBoxData.sequence) {
-                if (patternIndex !== undefined && patternIndex !== -1) { // 💡 -1 (空のパターン) もスキップ
+            // 💡 修正点: ultraBoxData.sequence が undefined でも [] で安全にループできるように修正
+            const sequenceToLoop = ultraBoxData.sequence || []; 
+
+            for (const patternIndex of sequenceToLoop) {
+                if (patternIndex !== undefined && patternIndex !== -1) { 
                     const pattern = ultraBoxData.patterns[patternIndex];
                     
                     if (pattern && pattern.notes) {
@@ -189,7 +191,6 @@
         document.addEventListener('DOMContentLoaded', () => {
             const fileInput = document.getElementById('jsonFile');
             
-            // UI表示後、すぐに利用可能
             showMessage('✅ 変換機能の準備完了。JSONファイルを選択してください。', 'success');
 
             fileInput.addEventListener('change', (e) => {
@@ -208,7 +209,7 @@
                         
                         if (ultraBoxData && (ultraBoxData.format === "UltraBox" || ultraBoxData.format === "BeepBox")) {
                             convertButton.ultraBoxData = ultraBoxData;
-                            convertButton.fileName = file.name.replace(/\.json$/i, ''); // 拡張子除去
+                            convertButton.fileName = file.name.replace(/\.json$/i, ''); 
                             convertButton.disabled = false;
                             showMessage(`✅ 「${file.name}」の読み込みに成功しました。変換ボタンを押してください。`, 'success');
                         } else {
