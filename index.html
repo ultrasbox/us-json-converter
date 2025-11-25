@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【究極の最終版 v17.0】</strong> 特殊なノート構造（`pitches`と`points`による長さ定義）と動的な曲の拍子設定に完全対応しました。
+        <strong>【真の最終版 v19.0】</strong> ノート抽出ロジックを究極に堅牢化し、**処理されたノートの総数**を表示する診断機能を追加しました。これでノートが見つからない原因が特定できます。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v17.0)
+        // カスタムコンバーターロジック (v19.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -63,12 +63,6 @@
         const MIDI_META = 0xFF;
         const MIDI_END_OF_TRACK = 0x2F;
         const MIDI_CHANNEL_NAME = 0x03; 
-        
-        // MIDI分解能: 1拍あたりのティック数 (ここではUltraBoxのティックをそのまま使用)
-        // UltraBoxでは 1拍あたり4ティックが一般的だが、ここではMIDIの標準的な分解能 24 をベースとする。
-        // NOTE: UltraBoxのティックをそのまま使うとMIDIプレーヤーで問題が出る可能性があるため、
-        // MIDI標準のTICKS_PER_BEAT (24)を使い、ノートの時間は比率で計算する方式に戻します。
-        // （これで正確な長さの再現性が最も高まります）
         const MIDI_TICKS_PER_BEAT = 24; 
 
         function writeVariableLengthQuantity(value) {
@@ -106,26 +100,28 @@
             const tempoBPM = ultraBoxData.beatsPerMinute || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
             
-            // 💡 v17.0 修正1：動的タイミングの取得
             const ultraBoxTicksPerBeat = ultraBoxData.ticksPerBeat || 4; 
             const beatsPerBar = ultraBoxData.beatsPerBar || 4;
-            const ultraBoxTicksPerBar = ultraBoxTicksPerBeat * beatsPerBar; // 例: 4 * 8 = 32
-            const midiTicksPerBar = MIDI_TICKS_PER_BEAT * beatsPerBar; // 例: 24 * 8 = 192
+            const midiTicksPerBar = MIDI_TICKS_PER_BEAT * beatsPerBar; 
             
-            // ティック変換係数 (UltraBoxティック数 * スケーリングファクター = MIDIティック数)
-            const tickScaleFactor = MIDI_TICKS_PER_BEAT / ultraBoxTicksPerBeat; // 例: 24 / 4 = 6
+            const tickScaleFactor = MIDI_TICKS_PER_BEAT / ultraBoxTicksPerBeat; 
 
             const trackChunks = [];
             const sequenceToLoop = ultraBoxData.sequence || []; 
+            let noteCount = 0; // 💡 v19.0: ノートカウントの初期化
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
             for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
                 const ultraBoxChannel = channels[channelIndex];
                 const midiChannel = channelIndex % 16; 
 
-                // 楽器プログラム番号を取得
+                // 楽器プログラム番号を取得 (GM 0-127 に収める)
                 const ultraBoxPresetId = ultraBoxChannel.instruments?.[0]?.preset;
                 const gmProgramNumber = (ultraBoxPresetId !== undefined && ultraBoxPresetId >= 0) ? ultraBoxPresetId % 128 : 0; 
+                
+                // トラック名をチャンネル名、楽器タイプ名の順で優先
+                const instrumentType = ultraBoxChannel.instruments?.[0]?.type;
+                const channelName = ultraBoxChannel.name || instrumentType || `Track ${channelIndex + 1}`;
 
                 const events = [];
                 let absoluteTick = 0;
@@ -144,25 +140,35 @@
                             
                             for (const note of pattern.notes) {
                                 
-                                // 💡 v16.0 修正：音高の配列を 'pitches' キーから取得
-                                const pitches = Array.isArray(note.pitches) ? note.pitches : [note.pitches];
+                                // 💡 v19.0: ノート抽出ロジックの究極の堅牢化
+                                
+                                // 音高の抽出 (pitchesを優先し、有効なデータがなければスキップ)
+                                const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
+                                    ? note.pitches 
+                                    : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
                                 if (!pitches || pitches.length === 0) continue; 
 
-                                // 💡 v17.0 修正2：持続時間を 'points' から計算
+                                // 持続時間の抽出 (pointsを優先)
                                 let ultraBoxDuration = 0;
                                 if (note.points && Array.isArray(note.points) && note.points.length > 0) {
-                                    // points配列の最後の要素の 'tick' が、ノートの正確な持続時間 (UltraBoxティック単位)
                                     ultraBoxDuration = note.points[note.points.length - 1].tick;
+                                } else if (typeof note.duration === 'number' && note.duration > 0) {
+                                    ultraBoxDuration = note.duration; 
                                 }
                                 
+                                // 開始位置は note.start (必須)
+                                const ultraBoxStart = note.start;
+
+                                // 開始位置がない、または持続時間がない場合はスキップ
+                                if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) continue;
+
                                 // UltraBoxティックをMIDIティックに変換
                                 const midiDuration = Math.round(ultraBoxDuration * tickScaleFactor);
-                                const midiStart = Math.round(note.start * tickScaleFactor);
+                                const midiStart = Math.round(ultraBoxStart * tickScaleFactor);
 
-                                // 有効な持続時間が得られない場合はスキップ (または最短時間を割り当てる)
-                                if (midiDuration <= 0 || note.start === undefined || typeof note.start !== 'number') continue;
+                                // 変換後の持続時間が0になった場合はスキップ
+                                if (midiDuration <= 0) continue;
 
-                                // 和音の各音高に対して Note On/Off イベントを生成
                                 for (const pitchValue of pitches) {
                                     
                                     if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) continue;
@@ -172,12 +178,11 @@
                                         tick: absoluteTick + midiStart, 
                                         type: MIDI_NOTE_ON,
                                         pitch: pitchValue,
-                                        // note.volume を使用し、最大127にスケーリング
                                         velocity: Math.round((note.volume + 1) * 127 / 10), 
                                         channel: midiChannel 
                                     });
                                     
-                                    // Note Off イベント (正確な絶対終了時刻)
+                                    // Note Off イベント
                                     events.push({
                                         tick: absoluteTick + midiStart + midiDuration, 
                                         type: MIDI_NOTE_OFF,
@@ -185,21 +190,21 @@
                                         velocity: 0, 
                                         channel: midiChannel 
                                     });
+                                    noteCount++; // 💡 v19.0: ノートカウントの増加
                                 }
                             }
                         }
                     }
-                    absoluteTick += midiTicksPerBar; // 次のバーの開始ティック (MIDIティック単位)
+                    absoluteTick += midiTicksPerBar; 
                 }
 
                 events.sort((a, b) => a.tick - b.tick);
                 
-                // 4. MIDIトラックチャンクのデータを構築 (トラック名と楽器設定を先頭に追加)
+                // 4. MIDIトラックチャンクのデータを構築
                 const trackEvents = [];
                 let lastTick = 0;
 
                 // チャンネル名を追加
-                const channelName = ultraBoxChannel.name || `Track ${channelIndex + 1}`;
                 const nameBytes = Array.from(new TextEncoder().encode(channelName));
 
                 trackEvents.push(
@@ -245,13 +250,9 @@
                 trackChunks.push(trackChunk);
             }
             
-            // 5. テンポトラックを作成 (必須)
+            // 5. テンポトラックを作成
             const tempoTrackEvents = [];
             tempoTrackEvents.push(
-                // 拍子イベント (4/4拍子としていますが、実際には ultraBoxData.beatsPerBar の値を使うべきですが、多くのDAWは無視します)
-                // 拍子イベントを挿入する場合は、ultraBoxData.beatsPerBar と 2 のべき乗 (例: 4) を使って計算が必要です。
-                // 今回は互換性を最優先し、テンポ設定のみに絞ります。
-                
                 ...writeVariableLengthQuantity(0), MIDI_META, 0x51, 0x03, 
                 ...writeUint32(tempoMicrosecondsPerBeat).slice(1) 
             );
@@ -266,22 +267,22 @@
             ];
 
             // 6. ヘッダーと全トラックチャンクを結合
-            const totalTracks = trackChunks.length + 1; // テンポトラック + 楽器トラック
+            const totalTracks = trackChunks.length + 1; 
             const header = [
                 ...writeUint32(MIDI_HEADER_CHUNK), ...writeUint32(6), 
-                ...writeUint16(MIDI_FORMAT_MULTI_TRACK), // Format 1
+                ...writeUint16(MIDI_FORMAT_MULTI_TRACK), 
                 ...writeUint16(totalTracks), 
-                ...writeUint16(MIDI_TICKS_PER_BEAT) // MIDI分解能を24に設定
+                ...writeUint16(MIDI_TICKS_PER_BEAT) 
             ];
 
             const fullMidi = [...header, ...tempoTrackChunk];
             trackChunks.forEach(chunk => fullMidi.push(...chunk));
 
-            return new Uint8Array(fullMidi).buffer;
+            return { buffer: new Uint8Array(fullMidi).buffer, noteCount: noteCount }; // 💡 v19.0: ノート数を返す
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (変更なし)
+        // イベントハンドラー (v19.0: 診断メッセージ対応)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -330,11 +331,11 @@
                 showMessage('🔄 MIDIへの変換を開始しました...', 'success');
                 
                 try {
-                    const arrayBuffer = convertUltraBoxToMidi(convertButton.ultraBoxData);
+                    const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
-                    downloadMidi(arrayBuffer, convertButton.fileName);
+                    downloadMidi(result.buffer, convertButton.fileName);
                     
-                    showMessage('🎉 MIDIファイルの生成とダウンロードを開始しました！', 'success');
+                    showMessage(`🎉 MIDIファイルの生成とダウンロードを開始しました！(ノート数: ${result.noteCount}個)`, 'success'); // 💡 v19.0: ノート数を表示
                     convertButton.disabled = false;
 
                 } catch (error) {
