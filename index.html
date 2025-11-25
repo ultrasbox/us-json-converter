@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v38.0 - 最終ダウンロード対策)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v40.0 - 持続時間修正)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v38.0 - 最終ダウンロード対策)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v40.0 - 持続時間修正)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【最終ダウンロード対策 v38.0】</strong> Chromeでの失敗を防ぐため、MIDIファイルは自動ダウンロード、ログファイルは**ボタンをクリック**して手動でダウンロードしてください。
+        <strong>【持続時間修正版 v40.0】</strong> 音符の持続時間計算ロジックを修正し、BeepBoxの複雑な音符長をより正確に再現します。
     </div>
 
     <div class="controls">
@@ -54,7 +54,6 @@
             URL.revokeObjectURL(url);
         }
 
-        // --- ログダウンロードボタンの表示 ---
         function displayLogButton(logContent, baseFileName) {
             logFileName = baseFileName + '_log.txt';
             logContentToDownload = logContent;
@@ -70,7 +69,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v38.0 - v37.0のロジックを継続)
+        // カスタムコンバーターロジック (v40.0 - 持続時間修正)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -80,9 +79,12 @@
         const MIDI_NOTE_ON = 0x90;
         const MIDI_NOTE_OFF = 0x80;
         const MIDI_PROGRAM_CHANGE = 0xC0; 
+        const MIDI_CONTROL_CHANGE = 0xB0; 
+        const MIDI_PITCH_BEND_CHANGE = 0xE0; 
         const MIDI_META = 0xFF;
         const MIDI_END_OF_TRACK = 0x2F;
         const MIDI_CHANNEL_NAME = 0x03; 
+        const CC_VOLUME = 0x07; 
 
         function writeVariableLengthQuantity(value) {
             let buffer = [];
@@ -100,6 +102,14 @@
 
         function writeUint16(value) { return [(value >> 8) & 0xFF, value & 0xFF]; }
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
+        
+        function convertPitchBend(ultraBoxValue) {
+            const clampedValue = Math.min(1.0, Math.max(-1.0, ultraBoxValue));
+            const midiValue = Math.round((clampedValue + 1.0) * 8191.5); 
+            const lsb = midiValue & 0x7F; 
+            const msb = (midiValue >> 7) & 0x7F; 
+            return [lsb, msb];
+        }
 
         function convertUltraBoxToMidi(ultraBoxData) {
             if (!ultraBoxData) {
@@ -225,13 +235,19 @@
                                 ultraBoxStart = note.points[0].tick;
                             }
 
+                            // 💡 v40.0: 持続時間 (ultraBoxDuration) の定義を修正
                             let ultraBoxDuration = 0;
-                            
-                            if (pointsValid) {
-                                ultraBoxDuration = note.points[note.points.length - 1].tick;
-                            } else if (typeof note.duration === 'number' && note.duration > 0) {
-                                ultraBoxDuration = note.duration; 
+                            if (typeof note.duration === 'number' && note.duration > 0) {
+                                // 1. duration フィールドがあれば、それを最優先
+                                ultraBoxDuration = note.duration;
+                            } else if (pointsValid) {
+                                // 2. duration が無く、points があれば、points の最後の tick を持続時間とする (BeepBox/UltraBoxの仕様に準拠)
+                                const lastPoint = note.points[note.points.length - 1];
+                                if (typeof lastPoint.tick === 'number') {
+                                    ultraBoxDuration = lastPoint.tick;
+                                }
                             }
+                            // Note: この ultraBoxDuration は、note.startからの相対的な長さを示す。
                             
                             if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) {
                                 let reason = `開始ティック: ${ultraBoxStart} (${typeof ultraBoxStart}), 持続時間: ${ultraBoxDuration}`;
@@ -246,16 +262,15 @@
                                 skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: MIDI持続時間(${midiDuration}t)が0以下`);
                                 continue;
                             }
-
-                            let volumeValue = 10;
-                            if (pointsValid && typeof note.points[0].volume === 'number') {
-                                volumeValue = note.points[0].volume;
-                            } else if (typeof note.volume === 'number') {
-                                volumeValue = note.volume;
-                            }
                             
-                            const maxVolume = volumeValue > 10 ? 100 : 10;
-                            const velocity = Math.min(127, Math.max(1, Math.round(volumeValue * 127 / maxVolume)));
+                            let startVolumeValue = 10;
+                            if (pointsValid && typeof note.points[0].volume === 'number') {
+                                startVolumeValue = note.points[0].volume;
+                            } else if (typeof note.volume === 'number') {
+                                startVolumeValue = note.volume;
+                            }
+                            const maxVolume = startVolumeValue > 10 ? 100 : 10;
+                            const velocity = Math.min(127, Math.max(1, Math.round(startVolumeValue * 127 / maxVolume)));
 
 
                             for (const pitchValue of pitches) {
@@ -265,18 +280,62 @@
                                     continue;
                                 }
 
-                                // Note On/Off イベントを追加
+                                // 1. Note On イベントを追加
                                 events.push({
                                     tick: absoluteTick + midiStart, type: MIDI_NOTE_ON, pitch: pitchValue, velocity: velocity, channel: midiChannel 
                                 });
+                                
+                                // 2. Note Off イベントを追加
                                 events.push({
                                     tick: absoluteTick + midiStart + midiDuration, type: MIDI_NOTE_OFF, pitch: pitchValue, velocity: 0, channel: midiChannel 
                                 });
+                                
                                 noteCount++; 
+                            }
+
+                            // 3. Note Pointsに基づくコントロールイベントを追加 (ピッチベンド/ボリューム)
+                            if (pointsValid) {
+                                for (const point of note.points) {
+                                    // 💡 v40.0: pointTickは、音符の開始位置 + pointの相対的なtickで計算
+                                    const pointTick = absoluteTick + midiStart + Math.round(point.tick * tickScaleFactor);
+                                    
+                                    // 3-A. ピッチベンドチェンジ
+                                    if (typeof point.pitchBend === 'number') {
+                                        const [lsb, msb] = convertPitchBend(point.pitchBend);
+                                        events.push({
+                                            tick: pointTick, 
+                                            type: MIDI_PITCH_BEND_CHANGE, 
+                                            value1: lsb, 
+                                            value2: msb, 
+                                            channel: midiChannel 
+                                        });
+                                    }
+                                    
+                                    // 3-B. チャンネルボリューム (CC 07)
+                                    if (typeof point.volume === 'number') {
+                                        const volumeCCValue = Math.min(127, Math.max(0, Math.round(point.volume * 127 / maxVolume)));
+                                        events.push({
+                                            tick: pointTick, 
+                                            type: MIDI_CONTROL_CHANGE, 
+                                            value1: CC_VOLUME, // CC No. 7
+                                            value2: volumeCCValue, 
+                                            channel: midiChannel 
+                                        });
+                                    }
+                                }
+                                
+                                // ノート終了時にピッチベンドを中央値 (8192) にリセット
+                                const [lsb_reset, msb_reset] = convertPitchBend(0.0);
+                                events.push({
+                                    tick: absoluteTick + midiStart + midiDuration, 
+                                    type: MIDI_PITCH_BEND_CHANGE, 
+                                    value1: lsb_reset, 
+                                    value2: msb_reset, 
+                                    channel: midiChannel 
+                                });
                             }
                         }
                     } else {
-                        // パターンが見つからない/構造が不正
                         let rawDataString = "";
                          if (!firstPatternErrorLogged) { 
                             if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
@@ -317,15 +376,33 @@
 
                 for (const event of events) {
                     const deltaTime = event.tick - lastTick;
-                    if (deltaTime < 0) throw new Error("MIDI Time Error: Negative delta time.");
+                    if (deltaTime < 0) throw new Error(`MIDI Time Error: Negative delta time. Tick: ${event.tick}, Last Tick: ${lastTick}`);
 
-                    trackEvents.push(
-                        ...writeVariableLengthQuantity(deltaTime), 
-                        event.type | event.channel, 
-                        event.pitch, 
-                        event.velocity 
-                    );
-
+                    const deltaBytes = writeVariableLengthQuantity(deltaTime);
+                    
+                    if (event.type === MIDI_NOTE_ON || event.type === MIDI_NOTE_OFF) {
+                        trackEvents.push(
+                            ...deltaBytes, 
+                            event.type | event.channel, 
+                            event.pitch, 
+                            event.velocity 
+                        );
+                    } else if (event.type === MIDI_PITCH_BEND_CHANGE) { 
+                         trackEvents.push(
+                            ...deltaBytes, 
+                            event.type | event.channel, 
+                            event.value1, 
+                            event.value2  
+                        );
+                    } else if (event.type === MIDI_CONTROL_CHANGE) { 
+                         trackEvents.push(
+                            ...deltaBytes, 
+                            event.type | event.channel, 
+                            event.value1, 
+                            event.value2  
+                        );
+                    }
+                    
                     lastTick = event.tick;
                 }
 
@@ -379,7 +456,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v38.0)
+        // イベントハンドラー (v40.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
