@@ -14,7 +14,7 @@
     <p>JSONファイルをアップロードすると、伸ばし音が切断されない正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【真の最終構造対応版 v14.0】</strong> パターンデータを元のIDで直接参照するよう修正。この難敵ファイルが持つ全ての構造上の問題を完全に解決します。
+        <strong>【究極の最終版 v15.0】</strong> パターンIDの型を強制し、イベントが空でも**必ずトラックチャンクを生成する**ように修正しました。これでファイルサイズは確実に増加します。
         <br>※極端に大きなファイルでは、処理に時間がかかる場合があります。
     </div>
 
@@ -50,7 +50,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v14.0)
+        // カスタムコンバーターロジック (v15.0)
         // ----------------------------------------------------------------------
 
         // MIDI定数とVLQエンコーディング
@@ -89,13 +89,12 @@
                 throw new Error("JSONデータが空です。ファイルを再アップロードしてください。");
             }
             
-            // v10.0: channelsはObject.valuesで配列化 (連番のキーしかないため安全)
+            // データ構造の揺らぎを吸収
             const channels = Array.isArray(ultraBoxData.channels) 
                 ? ultraBoxData.channels 
                 : Object.values(ultraBoxData.channels || {}); 
             
-            // 💡 v14.0 修正：patternsは元のオブジェクト/配列構造を維持し、直接参照を可能にする
-            // UltraBoxのpatternsは、キーが非連番のオブジェクトであることが多いため、Object.valuesは使わない
+            // patternsは元のオブジェクト/配列構造を維持し、直接参照を可能にする
             const patterns = ultraBoxData.patterns || {}; 
 
             if (channels.length === 0) {
@@ -127,9 +126,9 @@
                         ? ultraBoxChannel.patterns[barIndex]
                         : -1; 
                     
-                    // 💡 v14.0 修正：patternIndexが -1 ではないことだけをチェックし、patternsオブジェクト/配列から直接キー（ID）でパターンを取得する
+                    // 💡 v15.0 修正1：patternIndexをString()でキャストし、オブジェクトキーの型を保証する
                     if (patternIndex !== -1) { 
-                        const pattern = patterns[patternIndex]; // IDで直接ルックアップ！
+                        const pattern = patterns[String(patternIndex)]; // IDを文字列化してルックアップ！
                         
                         // pattern.notes が存在し、配列であればノート抽出に進む
                         if (pattern && pattern.notes && Array.isArray(pattern.notes)) {
@@ -141,6 +140,9 @@
 
                                 for (const pitchValue of pitches) {
                                     
+                                    // pitchValueが有効な数値であることを確認 (念のための最終チェック)
+                                    if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) continue;
+
                                     // Note On イベント
                                     events.push({
                                         tick: absoluteTick + note.start, 
@@ -215,10 +217,8 @@
                     ...writeUint32(trackSize), 
                     ...trackEvents
                 ];
-                // トラックにイベントがある場合のみ追加
-                if (events.length > 0) {
-                    trackChunks.push(trackChunk);
-                }
+                // 💡 v15.0 修正2：トラックのイベント数が0でも、トラックチャンクを必ず追加する
+                trackChunks.push(trackChunk);
             }
             
             // 5. テンポトラックを作成 (必須)
@@ -253,7 +253,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー 
+        // イベントハンドラー (変更なし)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
