@@ -84,11 +84,17 @@
         function writeUint32(value) { return [(value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]; }
 
         function convertUltraBoxToMidi(ultraBoxData) {
-            // 💡 必須プロパティの存在をここでチェック
-            if (!ultraBoxData || !ultraBoxData.channels || !ultraBoxData.patterns) {
-                // ファイル読み込みは成功したが、変換に必要なデータがない場合
-                throw new Error("曲のデータ (channels/patterns) が見つかりません。アップロードしたファイルが本当にUltraBoxのJSONファイルか確認してください。");
+            // 💡 修正点: 必須プロパティが「配列として存在し、かつ空ではないか」を厳密にチェック
+            if (!ultraBoxData) {
+                throw new Error("JSONデータが空です。");
             }
+            if (!Array.isArray(ultraBoxData.channels) || ultraBoxData.channels.length === 0) {
+                throw new Error("曲のチャンネルデータが見つからないか、データが空です。");
+            }
+            if (!Array.isArray(ultraBoxData.patterns) || ultraBoxData.patterns.length === 0) {
+                throw new Error("曲のパターンデータが見つからないか、データが空です。");
+            }
+            // 修正ここまで 💡
             
             const tempoBPM = ultraBoxData.tempo || 150;
             const tempoMicrosecondsPerBeat = Math.round(60000000 / tempoBPM); 
@@ -99,7 +105,6 @@
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別のMIDIトラックを作成
             for (let channelIndex = 0; channelIndex < ultraBoxData.channels.length; channelIndex++) {
                 const ultraBoxChannel = ultraBoxData.channels[channelIndex];
-                // MIDIチャンネルは0〜15の範囲にマップ
                 const midiChannel = channelIndex % 16; 
 
                 const events = [];
@@ -108,7 +113,6 @@
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
                 for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
                     
-                    // パターンインデックスの取得 (チャンネルのパターン配列から)
                     const patternIndex = (ultraBoxChannel.patterns && ultraBoxChannel.patterns[barIndex] !== undefined)
                         ? ultraBoxChannel.patterns[barIndex]
                         : -1; 
@@ -141,7 +145,6 @@
                     absoluteTick += TICKS_PER_BAR; // 次のバーの開始ティック
                 }
 
-                // 3. イベントを絶対ティック順にソート
                 events.sort((a, b) => a.tick - b.tick);
                 
                 // 4. MIDIトラックチャンクのデータを構築
@@ -245,16 +248,17 @@
                     try {
                         const ultraBoxData = JSON.parse(event.target.result);
                         
-                        // 💡 修正点: channels/patternsの存在チェックをここで実行しない (convertUltraBoxToMidiに任せる)
                         if (ultraBoxData && (ultraBoxData.format === "UltraBox" || ultraBoxData.format === "BeepBox")) {
                             convertButton.ultraBoxData = ultraBoxData;
                             convertButton.fileName = file.name.replace(/\.json$/i, ''); 
                             convertButton.disabled = false;
+                            // 💡 読み込み成功メッセージは変換前の段階で表示
                             showMessage(`✅ 「${file.name}」の読み込みに成功しました。変換ボタンを押してください。`, 'success');
                         } else {
                             throw new Error(`ファイル形式がUltraBox/BeepBoxではありません。`);
                         }
                     } catch (error) {
+                        // 読み込み・パース失敗
                         showMessage(`❌ ファイル解析失敗: ${error.message}`, 'error');
                         convertButton.ultraBoxData = null;
                     }
@@ -278,6 +282,7 @@
                     convertButton.disabled = false;
 
                 } catch (error) {
+                    // 変換処理中のエラー (データ不備など)
                     showMessage(`💥 変換処理中にエラーが発生しました: ${error.message}`, 'error');
                     convertButton.disabled = false;
                 }
