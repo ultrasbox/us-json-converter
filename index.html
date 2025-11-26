@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v41.0 - ティック計算の改善)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v42.0 - 特殊JSON構造対応)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v41.0 - ティック計算の改善)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v42.0 - 特殊JSON構造対応)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
-    <div class="message success" style="display: block;">
-        <strong>【最終精度向上版 v41.0】</strong> 音符の長さのズレを解消するため、UltraBoxのティックからMIDIのティックへの**丸め誤差を排除した精密な計算ロジック**に修正しました。
+    <div class="message warning" style="display: block;">
+        <strong>【最終互換性強化版 v42.0】</strong> 特殊なJSON構造（パターンIDではなく、パターンオブジェクトが直接配列に含まれる形式）に対応しました。
     </div>
 
     <div class="controls">
@@ -69,7 +69,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v41.0 - ティック計算の改善)
+        // カスタムコンバーターロジック (v42.0 - 特殊JSON構造対応)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -127,6 +127,8 @@
             const patterns = ultraBoxData.patterns || {}; 
 
             let sequenceToLoop = ultraBoxData.sequence || []; 
+            
+            // sequenceが空の場合、最初のチャンネルのパターンリストを代替シーケンスとして使用
             if (sequenceToLoop.length === 0) {
                 const firstChannelPatterns = channels[0].patterns;
                 if (firstChannelPatterns && Array.isArray(firstChannelPatterns) && firstChannelPatterns.length > 0) {
@@ -135,8 +137,12 @@
             }
 
             if (sequenceToLoop.length === 0) {
-                 throw new Error("データ構造エラー: シーケンスデータ ('sequence') がルートにも、最初のチャンネルにも見つからないか、空です。曲の小節数が設定されていません。");
+                 throw new Error("データ構造エラー: シーケンスデータ ('sequence') が見つからないか、空です。");
             }
+            
+            // 💡 曲の長さは sequenceの長さと loopBarsの小さい方を取る
+            const totalBars = Math.min(sequenceToLoop.length, ultraBoxData.loopBars || sequenceToLoop.length);
+            sequenceToLoop = sequenceToLoop.slice(0, totalBars); // 曲の長さを totalBarsに制限
 
             // --- 以降、正常なデータ処理 ---
             
@@ -145,11 +151,9 @@
             
             const ultraBoxTicksPerBeat = ultraBoxData.ticksPerBeat || 4; 
             const beatsPerBar = ultraBoxData.beatsPerBar || 4;
-            // 💡 UltraBox 1小節あたりのティック数
             const ultraBoxTicksPerBar = ultraBoxTicksPerBeat * beatsPerBar;
             const midiTicksPerBar = MIDI_TICKS_PER_BEAT * beatsPerBar; 
             
-            // 💡 スケールファクターを浮動小数点数で維持
             const tickScaleFactor = MIDI_TICKS_PER_BEAT / ultraBoxTicksPerBeat; 
 
             const trackChunks = [];
@@ -158,7 +162,7 @@
             let logDetailsSummary = [
                 `--- 変換サマリー ---`,
                 `トラック数: ${channels.length}個`,
-                `小節ループ数 (シーケンス長): ${sequenceToLoop.length}回`,
+                `小節ループ数 (処理対象): ${totalBars}回`,
                 `1小節あたりの MIDIティック: ${midiTicksPerBar}t (元のティック: ${ultraBoxTicksPerBar}t)`
             ].join('\n');
 
@@ -176,40 +180,47 @@
                 const channelName = ultraBoxChannel.name || instrumentType || `Track ${channelIndex + 1}`;
 
                 const events = [];
-                let absoluteBarStartTick = 0; // 💡 MIDIティックでの現在の小節の絶対開始位置
+                let absoluteBarStartTick = 0; 
                 
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
-                for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
+                for (let barIndex = 0; barIndex < totalBars; barIndex++) {
                     
-                    const sourceSequence = ultraBoxChannel.patterns || sequenceToLoop;
-                    const rawPatternRef = sourceSequence[barIndex]; 
-
-                    let patternIndex = -1; 
+                    const rawPatternRef = sequenceToLoop[barIndex]; 
                     let pattern = null;
 
+                    // 💡 v42.0: パターン参照ロジックの強化
                     if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
-                        patternIndex = rawPatternRef;
-                    } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                        if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
-                            patternIndex = rawPatternRef.pattern; 
-                        } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
-                            patternIndex = rawPatternRef.patternId;
-                        } else if (typeof rawPatternRef.id === 'number' && rawPatternRef.id >= 0) {
-                            patternIndex = rawPatternRef.id;
+                        // ケース1: 単なるパターンID (通常のBeepBox/UltraBox)
+                        if (Array.isArray(patterns)) {
+                            pattern = patterns[rawPatternRef];
+                        } else {
+                            pattern = patterns[String(rawPatternRef)];
                         }
+                    } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
                         
-                        if (patternIndex === -1 && Array.isArray(rawPatternRef.notes)) {
+                        if (Array.isArray(rawPatternRef.notes)) {
+                            // ケース2-A: パターンオブジェクトが直接埋め込まれている
                             pattern = rawPatternRef;
+                        } else {
+                            // ケース2-B: ID参照を含むオブジェクト (例: { patternId: 5 })
+                            let patternIndex = -1;
+                            if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
+                                patternIndex = rawPatternRef.pattern; 
+                            } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
+                                patternIndex = rawPatternRef.patternId;
+                            } else if (typeof rawPatternRef.id === 'number' && rawPatternRef.id >= 0) {
+                                patternIndex = rawPatternRef.id;
+                            }
+
+                            if (patternIndex >= 0) {
+                                if (Array.isArray(patterns)) {
+                                    pattern = patterns[patternIndex];
+                                } else {
+                                    pattern = patterns[String(patternIndex)];
+                                }
+                            }
                         }
                     } 
-                    
-                    if (pattern === null && patternIndex >= 0) {
-                        if (Array.isArray(patterns)) {
-                            pattern = patterns[patternIndex];
-                        } else {
-                            pattern = patterns[String(patternIndex)];
-                        }
-                    }
                     
                     // --- ノートの処理 ---
                     if (pattern && pattern.notes && Array.isArray(pattern.notes)) {
@@ -254,7 +265,7 @@
                                 continue;
                             }
 
-                            // 💡 v41.0: ティックの計算を浮動小数点数で行い、最後に丸める
+                            // 💡 ティックの計算を浮動小数点数で行い、最後に丸める
                             const midiStartFloat = ultraBoxStart * tickScaleFactor;
                             const midiDurationFloat = ultraBoxDuration * tickScaleFactor;
                             
@@ -285,7 +296,6 @@
 
                                 // 1. Note On イベントを追加
                                 events.push({
-                                    // 💡 絶対小節開始ティック + 音符の開始ティック
                                     tick: absoluteBarStartTick + midiStart, 
                                     type: MIDI_NOTE_ON, 
                                     pitch: pitchValue, 
@@ -295,7 +305,6 @@
                                 
                                 // 2. Note Off イベントを追加
                                 events.push({
-                                    // 💡 絶対小節開始ティック + 音符の開始ティック + 音符の持続時間
                                     tick: absoluteBarStartTick + midiStart + midiDuration, 
                                     type: MIDI_NOTE_OFF, 
                                     pitch: pitchValue, 
@@ -309,7 +318,7 @@
                             // 3. Note Pointsに基づくコントロールイベントを追加 (ピッチベンド/ボリューム)
                             if (pointsValid) {
                                 for (const point of note.points) {
-                                    // 💡 pointTickは、音符の開始位置 + pointの相対的なtickで計算し、最後に丸める
+                                    // pointTickは、音符の開始位置 + pointの相対的なtickで計算し、最後に丸める
                                     const pointTickFloat = midiStartFloat + (point.tick * tickScaleFactor);
                                     const pointTick = absoluteBarStartTick + Math.round(pointTickFloat);
                                     
@@ -350,19 +359,20 @@
                             }
                         }
                     } else {
+                        // エラーロギングの調整
                         let rawDataString = "";
-                         if (!firstPatternErrorLogged) { 
+                        let patternID = typeof rawPatternRef === 'number' ? rawPatternRef : 'オブジェクト/不正';
+                        
+                        if (!firstPatternErrorLogged || barIndex === 0) { 
                             if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                                rawDataString = `参照キー: ${Object.keys(rawPatternRef).join(', ')}`;
+                                rawDataString = `参照データ型: ${typeof rawPatternRef}, キー: ${Object.keys(rawPatternRef).join(', ')}`;
                             } else {
                                 rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
                             }
-                            firstPatternErrorLogged = true;
-                        } else {
-                             rawDataString = `(最初のパターン参照エラー[Ch1 Bar1]にて診断情報出力済み)`;
-                        }
+                            if (barIndex === 0) firstPatternErrorLogged = true;
+                        } 
                         
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: パターンデータの取得に失敗 (ID: ${patternIndex})\n>> 診断情報:\n${rawDataString}`);
+                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: パターンデータの取得に失敗 (ID: ${patternID})\n>> 診断情報:\n${rawDataString}`);
                     }
                     absoluteBarStartTick += midiTicksPerBar; 
                 }
@@ -470,7 +480,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v41.0)
+        // イベントハンドラー (v42.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
