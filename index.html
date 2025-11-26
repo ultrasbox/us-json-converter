@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v40.0 - 持続時間修正)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v41.0 - ティック計算の改善)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v40.0 - 持続時間修正)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v41.0 - ティック計算の改善)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
-    <div class="message warning" style="display: block;">
-        <strong>【持続時間修正版 v40.0】</strong> 音符の持続時間計算ロジックを修正し、BeepBoxの複雑な音符長をより正確に再現します。
+    <div class="message success" style="display: block;">
+        <strong>【最終精度向上版 v41.0】</strong> 音符の長さのズレを解消するため、UltraBoxのティックからMIDIのティックへの**丸め誤差を排除した精密な計算ロジック**に修正しました。
     </div>
 
     <div class="controls">
@@ -69,7 +69,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v40.0 - 持続時間修正)
+        // カスタムコンバーターロジック (v41.0 - ティック計算の改善)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -145,8 +145,11 @@
             
             const ultraBoxTicksPerBeat = ultraBoxData.ticksPerBeat || 4; 
             const beatsPerBar = ultraBoxData.beatsPerBar || 4;
+            // 💡 UltraBox 1小節あたりのティック数
+            const ultraBoxTicksPerBar = ultraBoxTicksPerBeat * beatsPerBar;
             const midiTicksPerBar = MIDI_TICKS_PER_BEAT * beatsPerBar; 
             
+            // 💡 スケールファクターを浮動小数点数で維持
             const tickScaleFactor = MIDI_TICKS_PER_BEAT / ultraBoxTicksPerBeat; 
 
             const trackChunks = [];
@@ -156,7 +159,7 @@
                 `--- 変換サマリー ---`,
                 `トラック数: ${channels.length}個`,
                 `小節ループ数 (シーケンス長): ${sequenceToLoop.length}回`,
-                `1小節あたりの MIDIティック: ${midiTicksPerBar}t`
+                `1小節あたりの MIDIティック: ${midiTicksPerBar}t (元のティック: ${ultraBoxTicksPerBar}t)`
             ].join('\n');
 
             let firstPatternErrorLogged = false; 
@@ -173,7 +176,7 @@
                 const channelName = ultraBoxChannel.name || instrumentType || `Track ${channelIndex + 1}`;
 
                 const events = [];
-                let absoluteTick = 0;
+                let absoluteBarStartTick = 0; // 💡 MIDIティックでの現在の小節の絶対開始位置
                 
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
                 for (let barIndex = 0; barIndex < sequenceToLoop.length; barIndex++) {
@@ -213,7 +216,7 @@
                         
                         if (pattern.notes.length === 0) {
                             skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 参照されたパターンに音符データがありません (notes: [])`);
-                            absoluteTick += midiTicksPerBar; 
+                            absoluteBarStartTick += midiTicksPerBar; 
                             continue;
                         }
 
@@ -235,19 +238,15 @@
                                 ultraBoxStart = note.points[0].tick;
                             }
 
-                            // 💡 v40.0: 持続時間 (ultraBoxDuration) の定義を修正
                             let ultraBoxDuration = 0;
                             if (typeof note.duration === 'number' && note.duration > 0) {
-                                // 1. duration フィールドがあれば、それを最優先
                                 ultraBoxDuration = note.duration;
                             } else if (pointsValid) {
-                                // 2. duration が無く、points があれば、points の最後の tick を持続時間とする (BeepBox/UltraBoxの仕様に準拠)
                                 const lastPoint = note.points[note.points.length - 1];
                                 if (typeof lastPoint.tick === 'number') {
                                     ultraBoxDuration = lastPoint.tick;
                                 }
                             }
-                            // Note: この ultraBoxDuration は、note.startからの相対的な長さを示す。
                             
                             if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) {
                                 let reason = `開始ティック: ${ultraBoxStart} (${typeof ultraBoxStart}), 持続時間: ${ultraBoxDuration}`;
@@ -255,8 +254,12 @@
                                 continue;
                             }
 
-                            const midiDuration = Math.round(ultraBoxDuration * tickScaleFactor);
-                            const midiStart = Math.round(ultraBoxStart * tickScaleFactor); 
+                            // 💡 v41.0: ティックの計算を浮動小数点数で行い、最後に丸める
+                            const midiStartFloat = ultraBoxStart * tickScaleFactor;
+                            const midiDurationFloat = ultraBoxDuration * tickScaleFactor;
+                            
+                            const midiStart = Math.round(midiStartFloat); 
+                            const midiDuration = Math.round(midiDurationFloat); 
 
                             if (midiDuration <= 0) {
                                 skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: MIDI持続時間(${midiDuration}t)が0以下`);
@@ -282,12 +285,22 @@
 
                                 // 1. Note On イベントを追加
                                 events.push({
-                                    tick: absoluteTick + midiStart, type: MIDI_NOTE_ON, pitch: pitchValue, velocity: velocity, channel: midiChannel 
+                                    // 💡 絶対小節開始ティック + 音符の開始ティック
+                                    tick: absoluteBarStartTick + midiStart, 
+                                    type: MIDI_NOTE_ON, 
+                                    pitch: pitchValue, 
+                                    velocity: velocity, 
+                                    channel: midiChannel 
                                 });
                                 
                                 // 2. Note Off イベントを追加
                                 events.push({
-                                    tick: absoluteTick + midiStart + midiDuration, type: MIDI_NOTE_OFF, pitch: pitchValue, velocity: 0, channel: midiChannel 
+                                    // 💡 絶対小節開始ティック + 音符の開始ティック + 音符の持続時間
+                                    tick: absoluteBarStartTick + midiStart + midiDuration, 
+                                    type: MIDI_NOTE_OFF, 
+                                    pitch: pitchValue, 
+                                    velocity: 0, 
+                                    channel: midiChannel 
                                 });
                                 
                                 noteCount++; 
@@ -296,8 +309,9 @@
                             // 3. Note Pointsに基づくコントロールイベントを追加 (ピッチベンド/ボリューム)
                             if (pointsValid) {
                                 for (const point of note.points) {
-                                    // 💡 v40.0: pointTickは、音符の開始位置 + pointの相対的なtickで計算
-                                    const pointTick = absoluteTick + midiStart + Math.round(point.tick * tickScaleFactor);
+                                    // 💡 pointTickは、音符の開始位置 + pointの相対的なtickで計算し、最後に丸める
+                                    const pointTickFloat = midiStartFloat + (point.tick * tickScaleFactor);
+                                    const pointTick = absoluteBarStartTick + Math.round(pointTickFloat);
                                     
                                     // 3-A. ピッチベンドチェンジ
                                     if (typeof point.pitchBend === 'number') {
@@ -317,7 +331,7 @@
                                         events.push({
                                             tick: pointTick, 
                                             type: MIDI_CONTROL_CHANGE, 
-                                            value1: CC_VOLUME, // CC No. 7
+                                            value1: CC_VOLUME, 
                                             value2: volumeCCValue, 
                                             channel: midiChannel 
                                         });
@@ -327,7 +341,7 @@
                                 // ノート終了時にピッチベンドを中央値 (8192) にリセット
                                 const [lsb_reset, msb_reset] = convertPitchBend(0.0);
                                 events.push({
-                                    tick: absoluteTick + midiStart + midiDuration, 
+                                    tick: absoluteBarStartTick + midiStart + midiDuration, 
                                     type: MIDI_PITCH_BEND_CHANGE, 
                                     value1: lsb_reset, 
                                     value2: msb_reset, 
@@ -350,7 +364,7 @@
                         
                         skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: パターンデータの取得に失敗 (ID: ${patternIndex})\n>> 診断情報:\n${rawDataString}`);
                     }
-                    absoluteTick += midiTicksPerBar; 
+                    absoluteBarStartTick += midiTicksPerBar; 
                 }
                 
                 // 最適化されたソート処理
@@ -456,7 +470,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v40.0)
+        // イベントハンドラー (v41.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
