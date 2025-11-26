@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v51.0 - パターン参照修正)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v52.0 - イベント書き込み修正)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;font-weight:700;}.log-button:hover{background-color:#4ca388;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v51.0 - パターン参照修正)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v52.0 - イベント書き込み修正)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【デバッグ修正 v51.0】</strong> v50.0で発生したシーケンス終端でのパターンオブジェクト参照（Bar 33）の問題を、パターン参照ロジックの緩和によって修正しました。
+        <strong>【デバッグ修正 v52.0】</strong> v51.0で発生した「音符データがログにあるのに再生されない」問題に対応するため、MIDIトラックの初期化イベント（楽器、ボリューム）の書き込みロジックをより堅牢な方法に修正しました。
     </div>
 
     <div class="controls">
@@ -29,7 +29,7 @@
 
     <script>
         // バージョン定数を定義
-        const CONVERTER_VERSION = "v51.0";
+        const CONVERTER_VERSION = "v52.0";
 
         const convertButton = document.getElementById('convertButton');
         const messageArea = document.getElementById('messageArea');
@@ -49,7 +49,6 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = fileName;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -71,7 +70,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v51.0 - パターン参照修正)
+        // カスタムコンバーターロジック (v52.0 - イベント書き込み修正)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -119,7 +118,6 @@
         
         // v51.0: 音符の有無にかかわらず、notesプロパティが配列であれば有効なパターン構造とみなす（空の小節を許可）
         function ArrayOfNotesCheck(notes) {
-            // 配列であれば、notes.lengthが0でもtrueを返す
             return Array.isArray(notes);
         }
 
@@ -132,7 +130,7 @@
 
             // 1. パターンオブジェクト（ノートデータそのもの）を直接参照 (Bar 33などで発生)
             if (typeof rawPatternRef === 'object' && ArrayOfNotesCheck(rawPatternRef.notes)) {
-                return rawPatternRef; // notesが空配列（[]）でも、オブジェクト構造として採用する
+                return rawPatternRef; 
             }
             
             // 2. パターンID（数字）を参照
@@ -142,7 +140,6 @@
                 } else {
                     pattern = patterns[String(rawPatternRef)];
                 }
-                // v51.0: ここでも空のnotes配列を許可する
                 if (pattern && ArrayOfNotesCheck(pattern.notes)) {
                     return pattern;
                 }
@@ -165,14 +162,13 @@
                     } else {
                         pattern = patterns[String(patternIndex)];
                     }
-                    // v51.0: ここでも空のnotes配列を許可する
                     if (pattern && ArrayOfNotesCheck(pattern.notes)) {
                         return pattern;
                     }
                 }
             }
             
-            return null; // 有効なパターンが見つからなかった
+            return null; 
         }
 
         function convertUltraBoxToMidi(ultraBoxData) {
@@ -247,14 +243,42 @@
                 const events = [];
                 let absoluteBarStartTick = 0; 
                 
+                // --- v52.0 修正: トラック初期化イベントを 'events' 配列に統合 ---
+                
+                // 1-A. ピッチベンドリセット (tick: 0)
+                events.push({
+                    tick: 0, 
+                    type: MIDI_PITCH_BEND_CHANGE, 
+                    value1: PITCH_BEND_RESET_LSB, 
+                    value2: PITCH_BEND_RESET_MSB, 
+                    channel: midiChannel 
+                });
+                
+                // 1-B. 楽器 (Program Change) (tick: 0)
+                events.push({
+                    tick: 0, 
+                    type: MIDI_PROGRAM_CHANGE, 
+                    value1: gmProgramNumber, // value1にデータバイト
+                    channel: midiChannel 
+                });
+
+                // 1-C. チャンネルボリューム (CC 07) を最大 (127) に強制設定 (tick: 0)
+                events.push({
+                    tick: 0, 
+                    type: MIDI_CONTROL_CHANGE, 
+                    value1: CC_VOLUME, 
+                    value2: 127, 
+                    channel: midiChannel 
+                });
+                // ----------------------------------------------------------------------
+
+
                 // 2. このチャンネルの曲の長さ全体を巡回し、絶対ティックを計算
                 for (let barIndex = 0; barIndex < totalBars; barIndex++) {
                     
                     const rawPatternRef = sequenceToLoop[barIndex]; 
                     const pattern = getPatternFromReference(rawPatternRef, patterns);
 
-                    // --- ノートの処理 ---
-                    // v51.0: getPatternFromReferenceが空のパターンオブジェクトでも返すようになったため、ここでは pattern !== null のみチェック
                     if (pattern) {
                         
                         const patternNotes = pattern.notes; 
@@ -295,7 +319,6 @@
                                     continue;
                                 }
 
-                                // ティックの計算を浮動小数点数で行い、最後に丸める
                                 const midiStartFloat = ultraBoxStart * tickScaleFactor;
                                 const midiDurationFloat = ultraBoxDuration * tickScaleFactor;
                                 
@@ -320,7 +343,6 @@
                                 
                                 if (velocity < MIN_VELOCITY) {
                                     velocity = MIN_VELOCITY; 
-                                    logDetailsSummary += `\n[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] Velocityを ${MIN_VELOCITY} に強制補正しました。`;
                                 }
 
 
@@ -400,11 +422,9 @@
                                 }
                             }
                         } else {
-                            // patternNotes.length === 0 の場合（空の小節）
                              skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 参照されたパターンは有効ですが、音符データがありません (notes: [])`);
                         }
                     } else {
-                         // pattern === null の場合
                          let rawDataString = "";
                         if (rawPatternRef !== null && rawPatternRef !== undefined) {
                             if (typeof rawPatternRef === 'object') {
@@ -416,50 +436,31 @@
                              rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
                         }
                         
-                        // v51.0: Bar 33のエラーは解消しているはずなので、ここでは別の参照エラーをログに記録
                         skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 有効なパターンデータが見つからない (データ構造不正)\n>> 診断情報:\n${rawDataString}`);
                     }
                     absoluteBarStartTick += midiTicksPerBar; 
                 }
                 
-                // 最適化されたソート処理: ティックの昇順でソート
+                // 3. 最適化されたソート処理: ティックの昇順でソート
                 events.sort((a, b) => a.tick - b.tick);
                 
                 // 4. MIDIトラックチャンクのデータを構築
                 const trackEvents = [];
                 let lastTick = 0;
 
-                // **v50.0 修正:** TextEncoderで変換することで、特殊文字によるバイト配列の破損を防ぐ
                 const nameBytes = Array.from(new TextEncoder().encode(channelName));
 
-                // 4-A. トラック名
+                // 4-A. トラック名 (Meta Event, must be first)
                 trackEvents.push(
                     ...writeVariableLengthQuantity(0), MIDI_META, MIDI_CHANNEL_NAME, 
                     ...writeVariableLengthQuantity(nameBytes.length), 
                     ...nameBytes
                 );
                 
-                // 4-B. 楽器 (Program Change)
-                trackEvents.push(
-                    ...writeVariableLengthQuantity(0), 
-                    MIDI_PROGRAM_CHANGE | midiChannel, 
-                    gmProgramNumber 
-                );
-                
-                // 4-C. CC#7 (Channel Volume) を最大 (127) に強制設定
-                trackEvents.push(
-                    ...writeVariableLengthQuantity(0), 
-                    MIDI_CONTROL_CHANGE | midiChannel, 
-                    CC_VOLUME, 
-                    127 
-                );
-
-
+                // 4-B. メインイベントの書き込み
                 for (const event of events) {
                     const deltaTime = event.tick - lastTick;
-                    
                     const actualDelta = Math.max(0, deltaTime);
-                    
                     const deltaBytes = writeVariableLengthQuantity(actualDelta);
                     
                     if (event.type === MIDI_NOTE_ON || event.type === MIDI_NOTE_OFF) {
@@ -469,12 +470,18 @@
                             event.pitch, 
                             event.velocity 
                         );
+                    } else if (event.type === MIDI_PROGRAM_CHANGE) { // Program Change
+                         trackEvents.push(
+                            ...deltaBytes, 
+                            event.type | event.channel, 
+                            event.value1 // gmProgramNumber
+                        );
                     } else if (event.type === MIDI_PITCH_BEND_CHANGE) { 
                          trackEvents.push(
                             ...deltaBytes, 
                             event.type | event.channel, 
-                            event.value1, 
-                            event.value2  
+                            event.value1, // LSB
+                            event.value2  // MSB
                         );
                     } else if (event.type === MIDI_CONTROL_CHANGE) { 
                          trackEvents.push(
@@ -488,6 +495,7 @@
                     lastTick = event.tick;
                 }
 
+                // 4-C. トラック終了
                 trackEvents.push(
                     ...writeVariableLengthQuantity(0), MIDI_META, MIDI_END_OF_TRACK, 0x00 
                 );
@@ -526,11 +534,10 @@
                 ...writeUint16(MIDI_TICKS_PER_BEAT) 
             ];
 
-            // v50.0 修正：配列の結合処理を修正済み
             const fullMidi = [
                 ...header, 
                 ...tempoTrackChunk, 
-                ...trackChunks.flat() // フラット化により、多重配列の結合問題を解消
+                ...trackChunks.flat() 
             ];
 
             return { 
@@ -543,7 +550,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v51.0)
+        // イベントハンドラー (v52.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -598,7 +605,7 @@
                 try {
                     const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
-                    const midiFileName = baseFileName + '_fixed_multitrack_v51.mid';
+                    const midiFileName = baseFileName + '_fixed_multitrack_v52.mid';
                     
                     // 1. MIDIファイルのダウンロード (自動)
                     downloadFile(result.midiBuffer, midiFileName, "audio/midi");
@@ -616,10 +623,11 @@
                         
                         // MIDIファイルサイズが正常になったかを確認
                         if (fileSize < 50000) { 
-                            logContent += `⚠️ MIDIファイルサイズが ${fileSize} byte と小さすぎます。生成された音符ログを以下に記載します。\n`;
+                            logContent += `⚠️ MIDIファイルサイズが ${fileSize} byte と小さすぎます。（音符は${result.noteCount}個処理済）\n`;
+                            logContent += `本家ファイルが27KBであったため、警告の可能性が高いですが、念のため音符ログを以下に記載します。\n`;
                             logContent += result.processedNotesLog.join('\n');
                         } else { 
-                            logContent += `✅ MIDIファイルサイズが十分 (${fileSize} byte) です。詳細な音符ログは省略します。`;
+                            logContent += `✅ MIDIファイルサイズが十分 (${fileSize} byte) です。`;
                         }
                     } else {
                         logContent += "【失敗】音符データが一つも生成されませんでした。";
@@ -628,20 +636,15 @@
                     // 3. ログダウンロードボタンの表示
                     displayLogButton(logContent, baseFileName, false); 
                     
-                    if (result.noteCount > 0 && result.midiBuffer.byteLength > 50000) {
+                    if (result.noteCount > 0) {
                         showMessage(
-                            `🎉 変換完了！**MIDIファイル**をダウンロードしました。(ノート総数: ${result.noteCount}個 / ファイルサイズ: ${result.midiBuffer.byteLength} byte)`, 
+                            `🎉 変換完了！**MIDIファイル**をダウンロードしました。(ノート総数: ${result.noteCount}個 / ファイルサイズ: ${result.midiBuffer.byteLength} byte)。音符が鳴るかご確認ください。`, 
                             'success'
-                        );
-                    } else if (result.noteCount > 0 && result.midiBuffer.byteLength <= 50000) {
-                         showMessage(
-                            `⚠️ 音符は生成されましたが、ファイルサイズが**50KB以下**と小さすぎます。ファイルが破損している可能性があります。ログで音符データを確認してください。`, 
-                            'warning'
                         );
                     } else {
                         showMessage(
-                            `⚠️ 変換完了。ただし、音符が一つも見つかりませんでした。(ノート総数: 0個)。ログを確認してください。`, 
-                            'warning'
+                            `💥 変換完了。**しかし、音符データが一つも生成されませんでした。** ログで詳細を確認してください。`, 
+                            'error'
                         );
                     }
                     
@@ -649,18 +652,13 @@
 
                 } catch (error) {
                     
-                    // 1. エラーメッセージを含むログコンテンツを作成
                     let errorLogContent = `コンバーターバージョン: ${CONVERTER_VERSION}\n`;
                     errorLogContent += `--- 💥 致命的なエラーログ ---\n`;
-                    errorLogContent += `日時: ${new Date().toISOString()}\n`;
                     errorLogContent += `エラーメッセージ: ${error.message}\n`;
                     errorLogContent += `スタックトレース (あれば):\n${error.stack || "N/A"}\n\n`;
-                    errorLogContent += `このエラーにより、変換処理が途中で中断されました。`;
                     
-                    // 2. エラーログダウンロードボタンを表示
                     displayLogButton(errorLogContent, baseFileName, true); 
 
-                    // 3. エラーメッセージを表示
                     showMessage(`💥 変換処理中に致命的なエラーが発生しました: ${error.message}。エラーログボタンから詳細を確認してください。`, 'error');
                     convertButton.disabled = false;
                 }
