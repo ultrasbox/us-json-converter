@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v47.0 - パターン参照堅牢化)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v48.0 - シーケンス全面再構築)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;font-weight:700;}.log-button:hover{background-color:#4ca388;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v47.0 - パターン参照堅牢化)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v48.0 - シーケンス全面再構築)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【最終修正 v47.0】</strong> MIDIサイズが同じになる問題に対処するため、シーケンス内の**パターン参照が不正な値**だった場合の処理を強化し、隠れたエラーによる変換中断を防ぎます。 (CC#7設定は維持)
+        <strong>【最終修正 v48.0】</strong> シーケンスがパターンIDではなく**ノートデータオブジェクト**を直接参照している場合に、変換が失敗し空のMIDIファイルになる問題を解決するため、ロジックを根本的に見直しました。
     </div>
 
     <div class="controls">
@@ -28,6 +28,9 @@
     <div id="logDownloadContainer"></div>
 
     <script>
+        // バージョン定数を定義
+        const CONVERTER_VERSION = "v48.0";
+
         const convertButton = document.getElementById('convertButton');
         const messageArea = document.getElementById('messageArea');
         const logDownloadContainer = document.getElementById('logDownloadContainer');
@@ -68,7 +71,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v47.0 - パターン参照堅牢化)
+        // カスタムコンバーターロジック (v48.0 - シーケンス全面再構築)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -118,6 +121,56 @@
             return Array.isArray(notes) && notes.length > 0;
         }
 
+        function getPatternFromReference(rawPatternRef, patterns) {
+            let pattern = null;
+            
+            if (rawPatternRef === null || rawPatternRef === undefined) {
+                return null;
+            }
+
+            // 1. パターンオブジェクト（ノートデータそのもの）を直接参照
+            if (typeof rawPatternRef === 'object' && ArrayOfNotesCheck(rawPatternRef.notes)) {
+                return rawPatternRef;
+            }
+            
+            // 2. パターンID（数字）を参照
+            if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
+                if (Array.isArray(patterns)) {
+                    pattern = patterns[rawPatternRef];
+                } else {
+                    pattern = patterns[String(rawPatternRef)];
+                }
+                if (pattern && ArrayOfNotesCheck(pattern.notes)) {
+                    return pattern;
+                }
+            }
+
+            // 3. パターンIDを持つオブジェクトを参照 (例: {"pattern": 0} or {"patternId": 0} or {"id": 0})
+            if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
+                let patternIndex = -1;
+                if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
+                    patternIndex = rawPatternRef.pattern; 
+                } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
+                    patternIndex = rawPatternRef.patternId;
+                } else if (typeof rawPatternRef.id === 'number' && rawPatternRef.id >= 0) {
+                    patternIndex = rawPatternRef.id;
+                }
+
+                if (patternIndex >= 0) {
+                    if (Array.isArray(patterns)) {
+                        pattern = patterns[patternIndex];
+                    } else {
+                        pattern = patterns[String(patternIndex)];
+                    }
+                    if (pattern && ArrayOfNotesCheck(pattern.notes)) {
+                        return pattern;
+                    }
+                }
+            }
+            
+            return null; // 有効なパターンが見つからなかった
+        }
+
         function convertUltraBoxToMidi(ultraBoxData) {
             if (!ultraBoxData) {
                 throw new Error("JSONデータが空です。ファイルを再アップロードしてください。");
@@ -165,13 +218,13 @@
             let noteCount = 0; 
             let skippedEvents = []; 
             let logDetailsSummary = [
+                `コンバーターバージョン: ${CONVERTER_VERSION}`,
                 `--- 変換サマリー ---`,
                 `トラック数: ${channels.length}個`,
                 `小節ループ数 (処理対象): ${totalBars}回`,
                 `1小節あたりの MIDIティック: ${midiTicksPerBar}t (元のティック: ${ultraBoxTicksPerBar}t)`
             ].join('\n');
 
-            let firstPatternErrorLogged = false; 
 
             // 1. 各UltraBoxチャンネル（楽器）をループし、個別の MIDI トラックを作成
             for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
@@ -179,7 +232,8 @@
                 const midiChannel = channelIndex % 16; 
 
                 const ultraBoxPresetId = ultraBoxChannel.instruments?.[0]?.preset;
-                const gmProgramNumber = (ultraBoxPresetId !== undefined && ultraBoxPresetId >= 0) ? ultraBoxPresetId % 128 : 0; 
+                // preset ID (0-127) または 0
+                const gmProgramNumber = (ultraBoxPresetId !== undefined && ultraBoxPresetId >= 0 && ultraBoxPresetId < 128) ? ultraBoxPresetId : 0; 
                 
                 const instrumentType = ultraBoxChannel.instruments?.[0]?.type;
                 const channelName = ultraBoxChannel.name || instrumentType || `Track ${channelIndex + 1}`;
@@ -191,45 +245,9 @@
                 for (let barIndex = 0; barIndex < totalBars; barIndex++) {
                     
                     const rawPatternRef = sequenceToLoop[barIndex]; 
-                    let pattern = null;
+                    // 💡 v48.0: 複雑なパターン参照をここで一括処理
+                    const pattern = getPatternFromReference(rawPatternRef, patterns);
 
-                    // 💡 v47.0: パターン参照の堅牢化
-                    if (rawPatternRef === null || rawPatternRef === undefined) {
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: シーケンス内の参照値が不正 (null/undefined)`);
-                        absoluteBarStartTick += midiTicksPerBar; 
-                        continue;
-                    }
-                    
-                    if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
-                        if (Array.isArray(patterns)) {
-                            pattern = patterns[rawPatternRef];
-                        } else {
-                            pattern = patterns[String(rawPatternRef)];
-                        }
-                    } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                        
-                        if (ArrayOfNotesCheck(rawPatternRef.notes)) { 
-                            pattern = rawPatternRef;
-                        } else {
-                            let patternIndex = -1;
-                            if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
-                                patternIndex = rawPatternRef.pattern; 
-                            } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
-                                patternIndex = rawPatternRef.patternId;
-                            } else if (typeof rawPatternRef.id === 'number' && rawPatternRef.id >= 0) {
-                                patternIndex = rawPatternRef.id;
-                            }
-
-                            if (patternIndex >= 0) {
-                                if (Array.isArray(patterns)) {
-                                    pattern = patterns[patternIndex];
-                                } else {
-                                    pattern = patterns[String(patternIndex)];
-                                }
-                            }
-                        }
-                    } 
-                    
                     // --- ノートの処理 ---
                     if (pattern && ArrayOfNotesCheck(pattern.notes)) {
                         
@@ -279,14 +297,14 @@
                                 continue;
                             }
                             
-                            let startVolumeValue = 10;
+                            let startVolumeValue = ultraBoxChannel.instruments?.[0]?.volume || 10; // チャンネル楽器の基本音量を使用
                             if (pointsValid && typeof note.points[0].volume === 'number') {
                                 startVolumeValue = note.points[0].volume;
                             } else if (typeof note.volume === 'number') {
                                 startVolumeValue = note.volume;
                             }
                             
-                            const maxVolume = startVolumeValue > 10 ? 100 : 10;
+                            const maxVolume = ultraBoxChannel.type === 'drum' ? 100 : 10;
                             let velocity = Math.min(127, Math.max(1, Math.round(startVolumeValue * 127 / maxVolume)));
                             
                             // v45.0: Velocity 0 (音が出ない)を防止するための強制補正
@@ -299,6 +317,7 @@
                             // v43.0: 各ピッチに対して個別に Note On/Off イベントを作成
                             for (const pitchValue of pitches) {
                                 
+                                // pitchValueはUltraBoxのノート番号（MIDIノート番号と同じ）
                                 if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) {
                                     skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高(${pitchValue})がMIDI範囲外`);
                                     continue;
@@ -369,19 +388,18 @@
                         }
                     } else {
                         // パターンデータの取得に失敗
-                        let patternID = typeof rawPatternRef === 'number' ? rawPatternRef : 'オブジェクト/不正';
-                        let rawDataString = "";
-                        
-                        if (!firstPatternErrorLogged || barIndex === 0) { 
-                            if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
+                         let rawDataString = "";
+                        if (rawPatternRef !== null && rawPatternRef !== undefined) {
+                            if (typeof rawPatternRef === 'object') {
                                 rawDataString = `参照データ型: ${typeof rawPatternRef}, キー: ${Object.keys(rawPatternRef).join(', ')}`;
                             } else {
                                 rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
                             }
-                            if (barIndex === 0) firstPatternErrorLogged = true;
-                        } 
+                        } else {
+                             rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
+                        }
                         
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: パターンデータの取得に失敗 (ID: ${patternID})\n>> 診断情報:\n${rawDataString}`);
+                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 有効なパターンデータが見つからない (ノート数: 0)\n>> 診断情報:\n${rawDataString}`);
                     }
                     absoluteBarStartTick += midiTicksPerBar; 
                 }
@@ -504,7 +522,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v47.0)
+        // イベントハンドラー (v48.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -589,7 +607,8 @@
                 } catch (error) {
                     
                     // 1. エラーメッセージを含むログコンテンツを作成
-                    let errorLogContent = `--- 💥 致命的なエラーログ ---\n`;
+                    let errorLogContent = `コンバーターバージョン: ${CONVERTER_VERSION}\n`;
+                    errorLogContent += `--- 💥 致命的なエラーログ ---\n`;
                     errorLogContent += `日時: ${new Date().toISOString()}\n`;
                     errorLogContent += `エラーメッセージ: ${error.message}\n`;
                     errorLogContent += `スタックトレース (あれば):\n${error.stack || "N/A"}\n\n`;
