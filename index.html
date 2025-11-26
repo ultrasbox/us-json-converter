@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v49.0 - 音符処理の確定ログ)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v50.0 - ファイル書き出し最終修正)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;font-weight:700;}.log-button:hover{background-color:#4ca388;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v49.0 - 音符処理の確定ログ)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v50.0 - ファイル書き出し最終修正)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【デバッグ修正 v49.0】</strong> 変換が34KBで終了する問題に対応するため、**処理に成功したすべての音符イベントをログに出力**する機能を追加しました。
+        <strong>【デバッグ修正 v50.0】</strong> v49.0で音符の生成は成功しましたが、最終的な**MIDIファイルへの書き出し**に失敗していたため、トラックチャンク結合処理を修正しました。
     </div>
 
     <div class="controls">
@@ -29,7 +29,7 @@
 
     <script>
         // バージョン定数を定義
-        const CONVERTER_VERSION = "v49.0";
+        const CONVERTER_VERSION = "v50.0";
 
         const convertButton = document.getElementById('convertButton');
         const messageArea = document.getElementById('messageArea');
@@ -71,7 +71,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v49.0 - 音符処理の確定ログ)
+        // カスタムコンバーターロジック (v50.0 - ファイル書き出し最終修正)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -217,7 +217,7 @@
             const trackChunks = [];
             let noteCount = 0; 
             let skippedEvents = []; 
-            let processedNotesLog = []; // NEW: 処理された音符の詳細ログ
+            let processedNotesLog = []; 
 
             let logDetailsSummary = [
                 `コンバーターバージョン: ${CONVERTER_VERSION}`,
@@ -235,7 +235,6 @@
                 const midiChannel = channelIndex % 16; 
 
                 const ultraBoxPresetId = ultraBoxChannel.instruments?.[0]?.preset;
-                // preset ID (0-127) または 0
                 const gmProgramNumber = (ultraBoxPresetId !== undefined && ultraBoxPresetId >= 0 && ultraBoxPresetId < 128) ? ultraBoxPresetId : 0; 
                 
                 const instrumentType = ultraBoxChannel.instruments?.[0]?.type;
@@ -299,9 +298,8 @@
                                 continue;
                             }
                             
-                            let startVolumeValue = ultraBoxChannel.instruments?.[0]?.volume || 10; // チャンネル楽器の基本音量を使用
+                            let startVolumeValue = ultraBoxChannel.instruments?.[0]?.volume || 10; 
                             
-                            // Note-level volume check (must come first)
                             if (pointsValid && typeof note.points[0].volume === 'number') {
                                 startVolumeValue = note.points[0].volume;
                             } else if (typeof note.volume === 'number') {
@@ -311,17 +309,14 @@
                             const maxVolume = ultraBoxChannel.type === 'drum' ? 100 : 10;
                             let velocity = Math.min(127, Math.max(1, Math.round(startVolumeValue * 127 / maxVolume)));
                             
-                            // v45.0: Velocity 0 (音が出ない)を防止するための強制補正
                             if (velocity < MIN_VELOCITY) {
                                 velocity = MIN_VELOCITY; 
                                 logDetailsSummary += `\n[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] Velocityを ${MIN_VELOCITY} に強制補正しました。`;
                             }
 
 
-                            // v43.0: 各ピッチに対して個別に Note On/Off イベントを作成
                             for (const pitchValue of pitches) {
                                 
-                                // pitchValueはUltraBoxのノート番号（MIDIノート番号と同じ）
                                 if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) {
                                     skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高(${pitchValue})がMIDI範囲外`);
                                     continue;
@@ -347,7 +342,7 @@
                                 
                                 noteCount++; 
 
-                                // NEW: 処理成功ログに追加
+                                // 処理成功ログに追加
                                 processedNotesLog.push(
                                     `[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] PITCH:${pitchValue}, START:${absoluteBarStartTick + midiStart}t, DURATION:${midiDuration}t, VEL:${velocity}`
                                 );
@@ -356,7 +351,6 @@
                             // 3. Note Pointsに基づくコントロールイベントを追加 (ピッチベンド/ボリューム)
                             if (pointsValid) {
                                 for (const point of note.points) {
-                                    // pointTickは、音符の開始位置 + pointの相対的なtickで計算し、最後に丸める
                                     const pointTickFloat = midiStartFloat + (point.tick * tickScaleFactor);
                                     const pointTick = absoluteBarStartTick + Math.round(pointTickFloat);
                                     
@@ -374,7 +368,6 @@
                                     
                                     // 3-B. チャンネルボリューム (CC 07)
                                     if (typeof point.volume === 'number') {
-                                        // Max volume is 100 for drums, 10 for pitch channels in UltraBox.
                                         const pointMaxVolume = ultraBoxChannel.type === 'drum' ? 100 : 10;
                                         const volumeCCValue = Math.min(127, Math.max(0, Math.round(point.volume * 127 / pointMaxVolume)));
                                         events.push({
@@ -398,7 +391,6 @@
                             }
                         }
                     } else {
-                        // パターンデータの取得に失敗
                          let rawDataString = "";
                         if (rawPatternRef !== null && rawPatternRef !== undefined) {
                             if (typeof rawPatternRef === 'object') {
@@ -422,6 +414,7 @@
                 const trackEvents = [];
                 let lastTick = 0;
 
+                // **v50.0 修正:** TextEncoderで変換することで、特殊文字によるバイト配列の破損を防ぐ
                 const nameBytes = Array.from(new TextEncoder().encode(channelName));
 
                 // 4-A. トラック名
@@ -451,11 +444,7 @@
                     const deltaTime = event.tick - lastTick;
                     
                     const actualDelta = Math.max(0, deltaTime);
-                    // デルタタイムが負の場合は、0として処理し、処理の異常を回避
-                    if (deltaTime < 0) {
-                        // Note: 負のデルタタイムはソートで防がれるべきだが、念のため
-                    }
-
+                    
                     const deltaBytes = writeVariableLengthQuantity(actualDelta);
                     
                     if (event.type === MIDI_NOTE_ON || event.type === MIDI_NOTE_OFF) {
@@ -522,20 +511,24 @@
                 ...writeUint16(MIDI_TICKS_PER_BEAT) 
             ];
 
-            const fullMidi = [...header, ...tempoTrackChunk];
-            trackChunks.forEach(chunk => fullMidi.push(...chunk));
+            // **v50.0 修正:** Array.prototype.flat() を使用して、ネストされたトラックチャンク配列をフラットにする
+            const fullMidi = [
+                ...header, 
+                ...tempoTrackChunk, 
+                ...trackChunks.flat() // フラット化により、多重配列の結合問題を解消
+            ];
 
             return { 
                 midiBuffer: new Uint8Array(fullMidi).buffer,
                 noteCount: noteCount, 
                 skippedEvents: skippedEvents,
-                processedNotesLog: processedNotesLog, // NEW: 処理されたノートのログを返す
+                processedNotesLog: processedNotesLog, 
                 summary: logDetailsSummary 
             }; 
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v49.0)
+        // イベントハンドラー (v50.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -606,7 +599,6 @@
                         const fileSize = result.midiBuffer.byteLength;
                         logContent += `MIDIファイルサイズ: ${fileSize} バイト\n`;
                         
-                        // MIDIファイルサイズが小さい場合は詳細ログを全文表示
                         if (fileSize < 50000) { 
                             logContent += `⚠️ MIDIファイルサイズが ${fileSize} byte と非常に小さいため、生成されたすべての音符ログを以下に記載します。\n`;
                             logContent += result.processedNotesLog.join('\n');
@@ -620,14 +612,19 @@
                     // 3. ログダウンロードボタンの表示
                     displayLogButton(logContent, baseFileName, false); 
                     
-                    if (result.noteCount > 0) {
+                    if (result.noteCount > 0 && result.midiBuffer.byteLength > 50000) {
                         showMessage(
-                            `🎉 変換完了！**MIDIファイル**をダウンロードしました。画面下の**緑のログボタン**を押して詳細を確認してください。(ノート総数: ${result.noteCount}個)`, 
+                            `🎉 変換完了！**MIDIファイル**をダウンロードしました。(ノート総数: ${result.noteCount}個 / ファイルサイズ: ${result.midiBuffer.byteLength} byte)`, 
                             'success'
+                        );
+                    } else if (result.noteCount > 0 && result.midiBuffer.byteLength <= 50000) {
+                         showMessage(
+                            `⚠️ 音符は生成されましたが、ファイルサイズが**33KB**と小さすぎます。ファイルが破損している可能性があります。ログで音符データを確認してください。`, 
+                            'warning'
                         );
                     } else {
                         showMessage(
-                            `⚠️ 変換完了。ただし、音符が一つも見つかりませんでした。(ノート総数: 0個)。画面下の**ログボタン**を押して詳細を確認してください。`, 
+                            `⚠️ 変換完了。ただし、音符が一つも見つかりませんでした。(ノート総数: 0個)。ログを確認してください。`, 
                             'warning'
                         );
                     }
@@ -648,7 +645,7 @@
                     displayLogButton(errorLogContent, baseFileName, true); 
 
                     // 3. エラーメッセージを表示
-                    showMessage(`💥 変換処理中に致命的なエラーが発生しました: ${error.message}。画面下の**エラーログボタン**から詳細を確認してください。`, 'error');
+                    showMessage(`💥 変換処理中に致命的なエラーが発生しました: ${error.message}。エラーログボタンから詳細を確認してください。`, 'error');
                     convertButton.disabled = false;
                 }
             });
