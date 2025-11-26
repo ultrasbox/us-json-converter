@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v50.0 - ファイル書き出し最終修正)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v51.0 - パターン参照修正)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;font-weight:700;}.log-button:hover{background-color:#4ca388;}
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v50.0 - ファイル書き出し最終修正)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v51.0 - パターン参照修正)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【デバッグ修正 v50.0】</strong> v49.0で音符の生成は成功しましたが、最終的な**MIDIファイルへの書き出し**に失敗していたため、トラックチャンク結合処理を修正しました。
+        <strong>【デバッグ修正 v51.0】</strong> v50.0で発生したシーケンス終端でのパターンオブジェクト参照（Bar 33）の問題を、パターン参照ロジックの緩和によって修正しました。
     </div>
 
     <div class="controls">
@@ -29,7 +29,7 @@
 
     <script>
         // バージョン定数を定義
-        const CONVERTER_VERSION = "v50.0";
+        const CONVERTER_VERSION = "v51.0";
 
         const convertButton = document.getElementById('convertButton');
         const messageArea = document.getElementById('messageArea');
@@ -71,7 +71,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v50.0 - ファイル書き出し最終修正)
+        // カスタムコンバーターロジック (v51.0 - パターン参照修正)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -117,8 +117,10 @@
             return [lsb, msb];
         }
         
+        // v51.0: 音符の有無にかかわらず、notesプロパティが配列であれば有効なパターン構造とみなす（空の小節を許可）
         function ArrayOfNotesCheck(notes) {
-            return Array.isArray(notes) && notes.length > 0;
+            // 配列であれば、notes.lengthが0でもtrueを返す
+            return Array.isArray(notes);
         }
 
         function getPatternFromReference(rawPatternRef, patterns) {
@@ -128,9 +130,9 @@
                 return null;
             }
 
-            // 1. パターンオブジェクト（ノートデータそのもの）を直接参照
+            // 1. パターンオブジェクト（ノートデータそのもの）を直接参照 (Bar 33などで発生)
             if (typeof rawPatternRef === 'object' && ArrayOfNotesCheck(rawPatternRef.notes)) {
-                return rawPatternRef;
+                return rawPatternRef; // notesが空配列（[]）でも、オブジェクト構造として採用する
             }
             
             // 2. パターンID（数字）を参照
@@ -140,6 +142,7 @@
                 } else {
                     pattern = patterns[String(rawPatternRef)];
                 }
+                // v51.0: ここでも空のnotes配列を許可する
                 if (pattern && ArrayOfNotesCheck(pattern.notes)) {
                     return pattern;
                 }
@@ -162,6 +165,7 @@
                     } else {
                         pattern = patterns[String(patternIndex)];
                     }
+                    // v51.0: ここでも空のnotes配列を許可する
                     if (pattern && ArrayOfNotesCheck(pattern.notes)) {
                         return pattern;
                     }
@@ -250,147 +254,157 @@
                     const pattern = getPatternFromReference(rawPatternRef, patterns);
 
                     // --- ノートの処理 ---
-                    if (pattern && ArrayOfNotesCheck(pattern.notes)) {
+                    // v51.0: getPatternFromReferenceが空のパターンオブジェクトでも返すようになったため、ここでは pattern !== null のみチェック
+                    if (pattern) {
                         
-                        for (let noteIndex = 0; noteIndex < pattern.notes.length; noteIndex++) {
-                            const note = pattern.notes[noteIndex];
-                            
-                            const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
-                                ? note.pitches 
-                                : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
-                            if (!pitches || pitches.length === 0) {
-                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高データ(pitches/pitch)が見つからない`);
-                                continue;
-                            }
+                        const patternNotes = pattern.notes; 
 
-                            let ultraBoxStart = note.start;
-                            let pointsValid = note.points && Array.isArray(note.points) && note.points.length > 0;
+                        if (patternNotes && patternNotes.length > 0) {
                             
-                            if ((ultraBoxStart === undefined || ultraBoxStart === null) && pointsValid && typeof note.points[0].tick === 'number') {
-                                ultraBoxStart = note.points[0].tick;
-                            }
-
-                            let ultraBoxDuration = 0;
-                            if (typeof note.duration === 'number' && note.duration > 0) {
-                                ultraBoxDuration = note.duration;
-                            } else if (pointsValid) {
-                                const lastPoint = note.points[note.points.length - 1];
-                                if (typeof lastPoint.tick === 'number') {
-                                    ultraBoxDuration = lastPoint.tick;
-                                }
-                            }
-                            
-                            if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) {
-                                let reason = `開始ティック: ${ultraBoxStart} (${typeof ultraBoxStart}), 持続時間: ${ultraBoxDuration}`;
-                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 開始位置または持続時間が不正 (${reason})`);
-                                continue;
-                            }
-
-                            // ティックの計算を浮動小数点数で行い、最後に丸める
-                            const midiStartFloat = ultraBoxStart * tickScaleFactor;
-                            const midiDurationFloat = ultraBoxDuration * tickScaleFactor;
-                            
-                            const midiStart = Math.round(midiStartFloat); 
-                            const midiDuration = Math.round(midiDurationFloat); 
-
-                            if (midiDuration <= 0) {
-                                skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: MIDI持続時間(${midiDuration}t)が0以下`);
-                                continue;
-                            }
-                            
-                            let startVolumeValue = ultraBoxChannel.instruments?.[0]?.volume || 10; 
-                            
-                            if (pointsValid && typeof note.points[0].volume === 'number') {
-                                startVolumeValue = note.points[0].volume;
-                            } else if (typeof note.volume === 'number') {
-                                startVolumeValue = note.volume;
-                            }
-                            
-                            const maxVolume = ultraBoxChannel.type === 'drum' ? 100 : 10;
-                            let velocity = Math.min(127, Math.max(1, Math.round(startVolumeValue * 127 / maxVolume)));
-                            
-                            if (velocity < MIN_VELOCITY) {
-                                velocity = MIN_VELOCITY; 
-                                logDetailsSummary += `\n[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] Velocityを ${MIN_VELOCITY} に強制補正しました。`;
-                            }
-
-
-                            for (const pitchValue of pitches) {
+                            for (let noteIndex = 0; noteIndex < patternNotes.length; noteIndex++) {
+                                const note = patternNotes[noteIndex];
                                 
-                                if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) {
-                                    skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高(${pitchValue})がMIDI範囲外`);
+                                const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
+                                    ? note.pitches 
+                                    : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
+                                if (!pitches || pitches.length === 0) {
+                                    skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高データ(pitches/pitch)が見つからない`);
                                     continue;
                                 }
 
-                                // 1. Note On イベントを追加
-                                events.push({
-                                    tick: absoluteBarStartTick + midiStart, 
-                                    type: MIDI_NOTE_ON, 
-                                    pitch: pitchValue, 
-                                    velocity: velocity, 
-                                    channel: midiChannel 
-                                });
+                                let ultraBoxStart = note.start;
+                                let pointsValid = note.points && Array.isArray(note.points) && note.points.length > 0;
                                 
-                                // 2. Note Off イベントを追加
-                                events.push({
-                                    tick: absoluteBarStartTick + midiStart + midiDuration, 
-                                    type: MIDI_NOTE_OFF, 
-                                    pitch: pitchValue, 
-                                    velocity: 0, 
-                                    channel: midiChannel 
-                                });
-                                
-                                noteCount++; 
+                                if ((ultraBoxStart === undefined || ultraBoxStart === null) && pointsValid && typeof note.points[0].tick === 'number') {
+                                    ultraBoxStart = note.points[0].tick;
+                                }
 
-                                // 処理成功ログに追加
-                                processedNotesLog.push(
-                                    `[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] PITCH:${pitchValue}, START:${absoluteBarStartTick + midiStart}t, DURATION:${midiDuration}t, VEL:${velocity}`
-                                );
-                            }
-
-                            // 3. Note Pointsに基づくコントロールイベントを追加 (ピッチベンド/ボリューム)
-                            if (pointsValid) {
-                                for (const point of note.points) {
-                                    const pointTickFloat = midiStartFloat + (point.tick * tickScaleFactor);
-                                    const pointTick = absoluteBarStartTick + Math.round(pointTickFloat);
-                                    
-                                    // 3-A. ピッチベンドチェンジ
-                                    if (typeof point.pitchBend === 'number') {
-                                        const [lsb, msb] = convertPitchBend(point.pitchBend);
-                                        events.push({
-                                            tick: pointTick, 
-                                            type: MIDI_PITCH_BEND_CHANGE, 
-                                            value1: lsb, 
-                                            value2: msb, 
-                                            channel: midiChannel 
-                                        });
-                                    }
-                                    
-                                    // 3-B. チャンネルボリューム (CC 07)
-                                    if (typeof point.volume === 'number') {
-                                        const pointMaxVolume = ultraBoxChannel.type === 'drum' ? 100 : 10;
-                                        const volumeCCValue = Math.min(127, Math.max(0, Math.round(point.volume * 127 / pointMaxVolume)));
-                                        events.push({
-                                            tick: pointTick, 
-                                            type: MIDI_CONTROL_CHANGE, 
-                                            value1: CC_VOLUME, 
-                                            value2: volumeCCValue, 
-                                            channel: midiChannel 
-                                        });
+                                let ultraBoxDuration = 0;
+                                if (typeof note.duration === 'number' && note.duration > 0) {
+                                    ultraBoxDuration = note.duration;
+                                } else if (pointsValid) {
+                                    const lastPoint = note.points[note.points.length - 1];
+                                    if (typeof lastPoint.tick === 'number') {
+                                        ultraBoxDuration = lastPoint.tick;
                                     }
                                 }
                                 
-                                // ノート終了時にピッチベンドを中央値 (8192) にリセット
-                                events.push({
-                                    tick: absoluteBarStartTick + midiStart + midiDuration, 
-                                    type: MIDI_PITCH_BEND_CHANGE, 
-                                    value1: PITCH_BEND_RESET_LSB, 
-                                    value2: PITCH_BEND_RESET_MSB, 
-                                    channel: midiChannel 
-                                });
+                                if (ultraBoxStart === undefined || typeof ultraBoxStart !== 'number' || ultraBoxDuration <= 0) {
+                                    let reason = `開始ティック: ${ultraBoxStart} (${typeof ultraBoxStart}), 持続時間: ${ultraBoxDuration}`;
+                                    skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 開始位置または持続時間が不正 (${reason})`);
+                                    continue;
+                                }
+
+                                // ティックの計算を浮動小数点数で行い、最後に丸める
+                                const midiStartFloat = ultraBoxStart * tickScaleFactor;
+                                const midiDurationFloat = ultraBoxDuration * tickScaleFactor;
+                                
+                                const midiStart = Math.round(midiStartFloat); 
+                                const midiDuration = Math.round(midiDurationFloat); 
+
+                                if (midiDuration <= 0) {
+                                    skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: MIDI持続時間(${midiDuration}t)が0以下`);
+                                    continue;
+                                }
+                                
+                                let startVolumeValue = ultraBoxChannel.instruments?.[0]?.volume || 10; 
+                                
+                                if (pointsValid && typeof note.points[0].volume === 'number') {
+                                    startVolumeValue = note.points[0].volume;
+                                } else if (typeof note.volume === 'number') {
+                                    startVolumeValue = note.volume;
+                                }
+                                
+                                const maxVolume = ultraBoxChannel.type === 'drum' ? 100 : 10;
+                                let velocity = Math.min(127, Math.max(1, Math.round(startVolumeValue * 127 / maxVolume)));
+                                
+                                if (velocity < MIN_VELOCITY) {
+                                    velocity = MIN_VELOCITY; 
+                                    logDetailsSummary += `\n[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] Velocityを ${MIN_VELOCITY} に強制補正しました。`;
+                                }
+
+
+                                for (const pitchValue of pitches) {
+                                    
+                                    if (typeof pitchValue !== 'number' || pitchValue < 0 || pitchValue > 127) {
+                                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高(${pitchValue})がMIDI範囲外`);
+                                        continue;
+                                    }
+
+                                    // 1. Note On イベントを追加
+                                    events.push({
+                                        tick: absoluteBarStartTick + midiStart, 
+                                        type: MIDI_NOTE_ON, 
+                                        pitch: pitchValue, 
+                                        velocity: velocity, 
+                                        channel: midiChannel 
+                                    });
+                                    
+                                    // 2. Note Off イベントを追加
+                                    events.push({
+                                        tick: absoluteBarStartTick + midiStart + midiDuration, 
+                                        type: MIDI_NOTE_OFF, 
+                                        pitch: pitchValue, 
+                                        velocity: 0, 
+                                        channel: midiChannel 
+                                    });
+                                    
+                                    noteCount++; 
+
+                                    // 処理成功ログに追加
+                                    processedNotesLog.push(
+                                        `[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] PITCH:${pitchValue}, START:${absoluteBarStartTick + midiStart}t, DURATION:${midiDuration}t, VEL:${velocity}`
+                                    );
+                                }
+
+                                // 3. Note Pointsに基づくコントロールイベントを追加 (ピッチベンド/ボリューム)
+                                if (pointsValid) {
+                                    for (const point of note.points) {
+                                        const pointTickFloat = midiStartFloat + (point.tick * tickScaleFactor);
+                                        const pointTick = absoluteBarStartTick + Math.round(pointTickFloat);
+                                        
+                                        // 3-A. ピッチベンドチェンジ
+                                        if (typeof point.pitchBend === 'number') {
+                                            const [lsb, msb] = convertPitchBend(point.pitchBend);
+                                            events.push({
+                                                tick: pointTick, 
+                                                type: MIDI_PITCH_BEND_CHANGE, 
+                                                value1: lsb, 
+                                                value2: msb, 
+                                                channel: midiChannel 
+                                            });
+                                        }
+                                        
+                                        // 3-B. チャンネルボリューム (CC 07)
+                                        if (typeof point.volume === 'number') {
+                                            const pointMaxVolume = ultraBoxChannel.type === 'drum' ? 100 : 10;
+                                            const volumeCCValue = Math.min(127, Math.max(0, Math.round(point.volume * 127 / pointMaxVolume)));
+                                            events.push({
+                                                tick: pointTick, 
+                                                type: MIDI_CONTROL_CHANGE, 
+                                                value1: CC_VOLUME, 
+                                                value2: volumeCCValue, 
+                                                channel: midiChannel 
+                                            });
+                                        }
+                                    }
+                                    
+                                    // ノート終了時にピッチベンドを中央値 (8192) にリセット
+                                    events.push({
+                                        tick: absoluteBarStartTick + midiStart + midiDuration, 
+                                        type: MIDI_PITCH_BEND_CHANGE, 
+                                        value1: PITCH_BEND_RESET_LSB, 
+                                        value2: PITCH_BEND_RESET_MSB, 
+                                        channel: midiChannel 
+                                    });
+                                }
                             }
+                        } else {
+                            // patternNotes.length === 0 の場合（空の小節）
+                             skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 参照されたパターンは有効ですが、音符データがありません (notes: [])`);
                         }
                     } else {
+                         // pattern === null の場合
                          let rawDataString = "";
                         if (rawPatternRef !== null && rawPatternRef !== undefined) {
                             if (typeof rawPatternRef === 'object') {
@@ -402,7 +416,8 @@
                              rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
                         }
                         
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 有効なパターンデータが見つからない (ノート数: 0)\n>> 診断情報:\n${rawDataString}`);
+                        // v51.0: Bar 33のエラーは解消しているはずなので、ここでは別の参照エラーをログに記録
+                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 有効なパターンデータが見つからない (データ構造不正)\n>> 診断情報:\n${rawDataString}`);
                     }
                     absoluteBarStartTick += midiTicksPerBar; 
                 }
@@ -511,7 +526,7 @@
                 ...writeUint16(MIDI_TICKS_PER_BEAT) 
             ];
 
-            // **v50.0 修正:** Array.prototype.flat() を使用して、ネストされたトラックチャンク配列をフラットにする
+            // v50.0 修正：配列の結合処理を修正済み
             const fullMidi = [
                 ...header, 
                 ...tempoTrackChunk, 
@@ -528,7 +543,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v50.0)
+        // イベントハンドラー (v51.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -583,7 +598,7 @@
                 try {
                     const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
-                    const midiFileName = baseFileName + '_fixed_multitrack.mid';
+                    const midiFileName = baseFileName + '_fixed_multitrack_v51.mid';
                     
                     // 1. MIDIファイルのダウンロード (自動)
                     downloadFile(result.midiBuffer, midiFileName, "audio/midi");
@@ -599,11 +614,12 @@
                         const fileSize = result.midiBuffer.byteLength;
                         logContent += `MIDIファイルサイズ: ${fileSize} バイト\n`;
                         
+                        // MIDIファイルサイズが正常になったかを確認
                         if (fileSize < 50000) { 
-                            logContent += `⚠️ MIDIファイルサイズが ${fileSize} byte と非常に小さいため、生成されたすべての音符ログを以下に記載します。\n`;
+                            logContent += `⚠️ MIDIファイルサイズが ${fileSize} byte と小さすぎます。生成された音符ログを以下に記載します。\n`;
                             logContent += result.processedNotesLog.join('\n');
                         } else { 
-                            logContent += `✅ MIDIファイルサイズが十分 (${fileSize} byte) なため、詳細な音符ログは省略します。`;
+                            logContent += `✅ MIDIファイルサイズが十分 (${fileSize} byte) です。詳細な音符ログは省略します。`;
                         }
                     } else {
                         logContent += "【失敗】音符データが一つも生成されませんでした。";
@@ -619,7 +635,7 @@
                         );
                     } else if (result.noteCount > 0 && result.midiBuffer.byteLength <= 50000) {
                          showMessage(
-                            `⚠️ 音符は生成されましたが、ファイルサイズが**33KB**と小さすぎます。ファイルが破損している可能性があります。ログで音符データを確認してください。`, 
+                            `⚠️ 音符は生成されましたが、ファイルサイズが**50KB以下**と小さすぎます。ファイルが破損している可能性があります。ログで音符データを確認してください。`, 
                             'warning'
                         );
                     } else {
