@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v56.0 - スコープ修正・形式0)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v57.0 - ピッチベンドレンジ修正)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:800px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;font-weight:700;}.log-button:hover{background-color:#4ca388;}
         #logDisplay {
@@ -21,11 +21,11 @@
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v56.0 - スコープ修正・形式0)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v57.0 - ピッチベンドレンジ修正)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【緊急修正 v56.0】</strong> 変換失敗の原因だった**変数スコープのバグを修正**しました。MIDI形式0（シングル・トラック）で出力します。これで音が鳴るか確認してください。
+        <strong>【音質改善 v57.0】</strong> 「mp3-to-MIDIのような音」対策として、**MIDIファイル内でピッチベンドの可動範囲を1オクターブ（±12半音）に設定**するコマンドを追加しました。音が改善されるか確認してください。
     </div>
 
     <div class="controls">
@@ -44,7 +44,7 @@
 
     <script>
         // バージョン定数を定義
-        const CONVERTER_VERSION = "v56.0 (Format 0 - スコープ修正)";
+        const CONVERTER_VERSION = "v57.0 (Format 0 - ピッチベンドレンジ修正)";
         const MAX_DETAIL_LOG_NOTES = 200; 
 
         const convertButton = document.getElementById('convertButton');
@@ -94,7 +94,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v56.0 - MIDI形式0)
+        // カスタムコンバーターロジック (v57.0 - MIDI形式0)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -113,7 +113,13 @@
         const CC_VOLUME = 0x07; 
         const PITCH_BEND_RESET_LSB = 0x00; 
         const PITCH_BEND_RESET_MSB = 0x40; 
-
+        
+        // --- v57.0 NEW: ピッチベンドレンジ設定用定数 ---
+        const CC_RPN_MSB = 0x65; // RPN MSB (101)
+        const CC_RPN_LSB = 0x64; // RPN LSB (100)
+        const CC_DATA_ENTRY_MSB = 0x06; // Data Entry MSB (6)
+        const CC_DATA_ENTRY_LSB = 0x26; // Data Entry LSB (38)
+        const PITCH_BEND_RANGE_SEMITONES = 12; // 1オクターブ = 12半音
 
         function writeVariableLengthQuantity(value) {
             let buffer = [];
@@ -270,8 +276,9 @@
                 `UltraBoxチャンネル数: ${channels.length}個`,
                 `MIDI形式: Format 0 (シングル・トラック)`,
                 `小節ループ数 (処理対象): ${totalBars}回`,
-                `1小節あたりの MIDIティック: ${midiTicksPerBar}t (元のティック: ${ultraBoxTicksPerBeat * beatsPerBar}t)`,
-                `MIDIティック変換比率: ${tickScaleFactor}倍`
+                `1小節あたりの MIDIティック: ${midiTicksPerBar}t (元のティック: ${ultraBoxTicksPerBar * beatsPerBar}t)`,
+                `MIDIティック変換比率: ${tickScaleFactor}倍`,
+                `ピッチベンドレンジ設定: ${PITCH_BEND_RANGE_SEMITONES}半音 (v57.0追加)`
             ].join('\n');
 
 
@@ -306,12 +313,23 @@
                 });
 
                 // トラック初期化イベント (tick 0)
-                // 1. ピッチベンドリセット
-                allEvents.push({ tick: 0, type: MIDI_PITCH_BEND_CHANGE, value1: PITCH_BEND_RESET_LSB, value2: PITCH_BEND_RESET_MSB, channel: midiChannel });
-                // 2. プログラムチェンジ (楽器選択)
+                
+                // a. プログラムチェンジ (楽器選択)
                 allEvents.push({ tick: 0, type: MIDI_PROGRAM_CHANGE, value1: gmProgramNumber, channel: midiChannel });
-                // 3. チャンネルボリュームを最大に設定 (CC#7) - 音量問題対策として残す
+                // b. チャンネルボリュームを最大に設定 (CC#7)
                 allEvents.push({ tick: 0, type: MIDI_CONTROL_CHANGE, value1: CC_VOLUME, value2: 127, channel: midiChannel });
+                
+                // c. ピッチベンド・レンジの設定 (RPN) <- v57.0 NEW
+                // RPNをPitch Bend Range (00/00)に設定
+                allEvents.push({ tick: 0, type: MIDI_CONTROL_CHANGE, value1: CC_RPN_MSB, value2: 0x00, channel: midiChannel });
+                allEvents.push({ tick: 0, type: MIDI_CONTROL_CHANGE, value1: CC_RPN_LSB, value2: 0x00, channel: midiChannel });
+                // Data Entry MSBでレンジ(半音)を設定 (12 semitones)
+                allEvents.push({ tick: 0, type: MIDI_CONTROL_CHANGE, value1: CC_DATA_ENTRY_MSB, value2: PITCH_BEND_RANGE_SEMITONES, channel: midiChannel });
+                // Data Entry LSBは通常0
+                allEvents.push({ tick: 0, type: MIDI_CONTROL_CHANGE, value1: CC_DATA_ENTRY_LSB, value2: 0x00, channel: midiChannel });
+                
+                // d. ピッチベンドリセット
+                allEvents.push({ tick: 0, type: MIDI_PITCH_BEND_CHANGE, value1: PITCH_BEND_RESET_LSB, value2: PITCH_BEND_RESET_MSB, channel: midiChannel });
 
 
                 let absoluteBarStartTick = 0; 
@@ -365,7 +383,6 @@
                                     continue;
                                 }
 
-                                // V56.0 修正：noteOnTick/noteOffTick を外側のスコープに移動
                                 const midiStart = Math.round(ultraBoxStart * tickScaleFactor);
                                 const midiDuration = Math.round(ultraBoxDuration * tickScaleFactor); 
 
@@ -375,9 +392,9 @@
                                 }
                                 
                                 const noteOnTick = absoluteBarStartTick + midiStart;
-                                const noteOffTick = noteOnTick + midiDuration; // <-- v56.0: const宣言をこの位置に移動
+                                const noteOffTick = noteOnTick + midiDuration; 
 
-                                // v54.0/v55.0/v56.0 修正点: ベロシティを強制的に最大 (127) に設定
+                                // V54.0以降: ベロシティを強制的に最大 (127) に設定
                                 let velocity = 127; 
 
 
@@ -388,8 +405,6 @@
                                         continue;
                                     }
                                     
-                                    // noteOnTick/noteOffTick は既に外側で計算済み
-
                                     if (!continuesLast) { 
                                         allEvents.push({
                                             tick: noteOnTick, 
@@ -436,7 +451,7 @@
                                         }
                                     }
                                     
-                                    // ノート終了時にピッチベンドリセット (noteOffTick がこのスコープで参照可能になった)
+                                    // ノート終了時にピッチベンドリセット
                                     allEvents.push({
                                         tick: noteOffTick, 
                                         type: MIDI_PITCH_BEND_CHANGE, 
@@ -559,7 +574,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v56.0)
+        // イベントハンドラー (v57.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -612,7 +627,7 @@
 
                 convertButton.disabled = true;
                 logDownloadContainer.innerHTML = ''; 
-                showMessage('🔄 MIDIへの変換を開始しました... (MIDI形式0 - スコープ修正)', 'warning');
+                showMessage('🔄 MIDIへの変換を開始しました... (MIDI形式0 - ピッチベンドレンジ修正)', 'warning');
                 updateLogDisplay('MIDIデータ生成中...');
                 
                 const baseFileName = convertButton.fileName;
@@ -620,7 +635,7 @@
                 try {
                     const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
-                    const midiFileName = baseFileName + `_format0_v56_0.mid`;
+                    const midiFileName = baseFileName + `_format0_v57_0.mid`;
                     
                     // 1. MIDIファイルのダウンロード (自動)
                     downloadFile(result.midiBuffer, midiFileName, "audio/midi");
@@ -641,7 +656,7 @@
                             logContent += `引き続き音が出ない場合は、このログを全てコピーしてご連絡ください。\n`;
                             logContent += result.processedNotesLog.join('\n'); 
                         } else { 
-                            logContent += `⚠️ ノート総数が${result.noteCount}個のため、詳細ログの出力は省略しました。音が出ない場合はJSONを再アップロードしてください。\n`;
+                            logContent += `⚠️ ノート総数が${result.noteCount}個のため、詳細ログの出力は省略しました。\n`;
                             logContent += `最初の${MAX_DETAIL_LOG_NOTES}個のノートログ:\n`;
                             logContent += result.processedNotesLog.slice(0, MAX_DETAIL_LOG_NOTES).join('\n');
                             logContent += `\n...(ログ省略。全ログは${midiFileName.replace('.mid', '_log.txt')}をダウンロードしてください)`;
@@ -655,7 +670,7 @@
                     
                     if (result.noteCount > 0) {
                         showMessage(
-                            `🎉 変換完了！**MIDIファイル**をダウンロードしました。(ノート総数: ${result.noteCount}個)。**音が鳴るか**ご確認ください。`, 
+                            `🎉 変換完了！**MIDIファイル**をダウンロードしました。(ノート総数: ${result.noteCount}個)。**音が改善されたか**ご確認ください。`, 
                             'success'
                         );
                     } else {
