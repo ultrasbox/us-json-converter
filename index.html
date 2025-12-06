@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v52.3 - タイ/連続の処理を追加)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v52.4 - パターン参照ロジックを強化)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:800px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;font-weight:700;}.log-button:hover{background-color:#4ca388;}
         #logDisplay {
@@ -21,11 +21,11 @@
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v52.3 - タイ/連続の処理を追加)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v52.4 - パターン参照ロジックを強化)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【タイ/連続音符対応 v52.3】</strong> 音符のプロパティ <code>"continuesLastPattern": true</code> を認識し、小節のつなぎ目で音符が途切れないよう修正しました。
+        <strong>【パターン参照強化 v52.4】</strong> パターンがグローバル配列、チャンネル固有配列、オブジェクト埋め込みのいずれの方法で参照されていても、正しく音符データを取得できるようにロジックを修正しました。
     </div>
 
     <div class="controls">
@@ -44,8 +44,8 @@
 
     <script>
         // バージョン定数を定義
-        const CONVERTER_VERSION = "v52.3";
-        const MAX_DETAIL_LOG_NOTES = 200; // 詳細な音符ログを出力する最大ノート数
+        const CONVERTER_VERSION = "v52.4";
+        const MAX_DETAIL_LOG_NOTES = 200; 
 
         const convertButton = document.getElementById('convertButton');
         const messageArea = document.getElementById('messageArea');
@@ -63,7 +63,7 @@
         
         function updateLogDisplay(content) {
             logDisplay.textContent = content;
-            logDisplay.scrollTop = logDisplay.scrollHeight; // スクロールを一番下に
+            logDisplay.scrollTop = logDisplay.scrollHeight; 
         }
 
         function downloadFile(content, fileName, mimeType) {
@@ -81,7 +81,7 @@
             logFileName = baseFileName + (isError ? '_ERROR_log.txt' : '_log.txt');
             logContentToDownload = logContent;
             
-            updateLogDisplay(logContent); // 画面にログを表示
+            updateLogDisplay(logContent); 
 
             logDownloadContainer.innerHTML = `
                 <button id="logDownloadButton" class="log-button">
@@ -94,7 +94,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v52.3 - continuesLastPatternの処理を追加)
+        // カスタムコンバーターロジック (v52.4 - パターン参照ロジックを強化)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -139,35 +139,26 @@
             const msb = (midiValue >> 7) & 0x7F; 
             return [lsb, msb];
         }
-        
-        function ArrayOfNotesCheck(notes) {
-            return Array.isArray(notes);
-        }
 
-        function getPatternFromReference(rawPatternRef, patterns) {
+        // v52.4: パターン参照ロジックを強化
+        function getPatternFromReference(rawPatternRef, channelPatterns, globalPatterns) {
             let pattern = null;
             
             if (rawPatternRef === null || rawPatternRef === undefined) {
                 return null;
             }
 
-            if (typeof rawPatternRef === 'object' && ArrayOfNotesCheck(rawPatternRef.notes)) {
+            // Case 1: Pattern object is EMBEDDED DIRECTLY (e.g., sequence contains {notes: [...]})
+            if (typeof rawPatternRef === 'object' && Array.isArray(rawPatternRef.notes)) {
                 return rawPatternRef; 
             }
             
+            // Determine the ID to look up
+            let patternIndex = -1;
             if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
-                if (Array.isArray(patterns)) {
-                    pattern = patterns[rawPatternRef];
-                } else {
-                    pattern = patterns[String(rawPatternRef)];
-                }
-                if (pattern && ArrayOfNotesCheck(pattern.notes)) {
-                    return pattern;
-                }
-            }
-
-            if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                let patternIndex = -1;
+                patternIndex = rawPatternRef; // Case 2: Simple numerical ID
+            } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
+                // Case 3: Object with an ID property (e.g., {pattern: 0} or {id: 0})
                 if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
                     patternIndex = rawPatternRef.pattern; 
                 } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
@@ -175,14 +166,29 @@
                 } else if (typeof rawPatternRef.id === 'number' && rawPatternRef.id >= 0) {
                     patternIndex = rawPatternRef.id;
                 }
-
-                if (patternIndex >= 0) {
-                    if (Array.isArray(patterns)) {
-                        pattern = patterns[patternIndex];
-                    } else {
-                        pattern = patterns[String(patternIndex)];
+            }
+            
+            if (patternIndex >= 0) {
+                // 優先度1: チャンネル固有のパターン配列/マップから検索
+                if (channelPatterns) {
+                    if (Array.isArray(channelPatterns)) {
+                        pattern = channelPatterns[patternIndex];
+                    } else if (typeof channelPatterns === 'object') {
+                        pattern = channelPatterns[String(patternIndex)];
                     }
-                    if (pattern && ArrayOfNotesCheck(pattern.notes)) {
+                    if (pattern && Array.isArray(pattern.notes)) {
+                        return pattern;
+                    }
+                }
+
+                // 優先度2: グローバルパターン配列/マップから検索
+                if (globalPatterns) {
+                    if (Array.isArray(globalPatterns)) {
+                        pattern = globalPatterns[patternIndex];
+                    } else if (typeof globalPatterns === 'object') {
+                        pattern = globalPatterns[String(patternIndex)];
+                    }
+                    if (pattern && Array.isArray(pattern.notes)) {
                         return pattern;
                     }
                 }
@@ -190,7 +196,7 @@
             
             return null; 
         }
-
+        
         function convertUltraBoxToMidi(ultraBoxData) {
             if (!ultraBoxData) {
                 throw new Error("JSONデータが空です。ファイルを再アップロードしてください。");
@@ -204,17 +210,18 @@
                  throw new Error("データ構造エラー: チャンネルデータ ('channels') が見つからないか、空です。");
             }
             
-            const patterns = ultraBoxData.patterns || {}; 
-
+            const globalPatterns = ultraBoxData.patterns || {}; // グローバルパターン
+            
             let sequenceToLoop = ultraBoxData.sequence || []; 
             
             if (sequenceToLoop.length === 0) {
+                // sequenceがない場合、最初のチャンネルのsequenceまたはpatternsを使用する（フォールバック）
                 const firstChannelPatterns = channels[0].patterns;
                 if (firstChannelPatterns && Array.isArray(firstChannelPatterns) && firstChannelPatterns.length > 0) {
-                    sequenceToLoop = firstChannelPatterns;
+                    sequenceToLoop = firstChannelPatterns.map((_, i) => i); // パターンインデックスをシーケンスとして使用
                 }
             }
-
+            
             if (sequenceToLoop.length === 0) {
                  throw new Error("データ構造エラー: シーケンスデータ ('sequence') が見つからないか、空です。");
             }
@@ -250,6 +257,9 @@
             for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
                 const ultraBoxChannel = channels[channelIndex];
                 const midiChannel = channelIndex % 16; 
+                
+                // チャンネル固有のパターン配列
+                const channelPatterns = ultraBoxChannel.patterns; 
 
                 const ultraBoxPresetId = ultraBoxChannel.instruments?.[0]?.preset;
                 const gmProgramNumber = (ultraBoxPresetId !== undefined && ultraBoxPresetId >= 0 && ultraBoxPresetId < 128) ? ultraBoxPresetId : 0; 
@@ -289,7 +299,8 @@
                 for (let barIndex = 0; barIndex < totalBars; barIndex++) {
                     
                     const rawPatternRef = sequenceToLoop[barIndex]; 
-                    const pattern = getPatternFromReference(rawPatternRef, patterns);
+                    // v52.4: チャンネルパターンとグローバルパターンの両方をチェック
+                    const pattern = getPatternFromReference(rawPatternRef, channelPatterns, globalPatterns);
 
                     if (pattern) {
                         
@@ -300,7 +311,7 @@
                             for (let noteIndex = 0; noteIndex < patternNotes.length; noteIndex++) {
                                 const note = patternNotes[noteIndex];
                                 
-                                const continuesLast = note.continuesLastPattern === true; // v52.3: タイのフラグを取得
+                                const continuesLast = note.continuesLastPattern === true; 
 
                                 const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
                                     ? note.pitches 
@@ -370,7 +381,7 @@
                                     const noteOffTick = absoluteBarStartTick + midiStart + midiDuration;
 
 
-                                    if (!continuesLast) { // v52.3: タイでない場合のみNote-Onを生成
+                                    if (!continuesLast) { 
                                         events.push({
                                             tick: absoluteBarStartTick + midiStart, 
                                             type: MIDI_NOTE_ON, 
@@ -397,7 +408,7 @@
                                         channel: midiChannel 
                                     });
                                     
-                                    noteCount++; // Note-Offが生成されるので、音符数はカウントする
+                                    noteCount++; 
                                 }
 
                                 if (pointsValid) {
@@ -565,7 +576,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v52.3)
+        // イベントハンドラー (v52.4)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -626,7 +637,7 @@
                 try {
                     const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
-                    const midiFileName = baseFileName + '_fixed_multitrack_v52_3.mid';
+                    const midiFileName = baseFileName + '_fixed_multitrack_v52_4.mid';
                     
                     // 1. MIDIファイルのダウンロード (自動)
                     downloadFile(result.midiBuffer, midiFileName, "audio/midi");
