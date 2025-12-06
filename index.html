@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UltraBox JSON → MIDIコンバーター (v52.4 - パターン参照ロジックを強化)</title>
+    <title>UltraBox JSON → MIDIコンバーター (v53.0 - パターン取得失敗時の診断ログ強化)</title>
     <style>
         body{font-family:sans-serif;padding:20px;max-width:800px;margin:0 auto;line-height:1.6;background-color:#f4f7f6}h1{color:#1a4d6f;border-bottom:3px solid #6ac4a5;padding-bottom:10px;margin-bottom:30px}.controls{background:#fff;padding:25px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08);border:1px solid #e0e0e0}label{font-weight:700;display:block;margin-bottom:8px;color:#333}input[type=file]{margin-bottom:20px;display:block;padding:10px;border:1px solid #ccc;border-radius:6px;width:95%}button{padding:12px 25px;background-color:#007bff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:17px;transition:background-color .2s;width:100%;margin-top:10px;}button:hover:not(:disabled){background-color:#0056b3}button:disabled{background-color:#a0a0a0;cursor:not-allowed}.message{margin-top:25px;padding:15px;border-radius:8px;font-weight:700;display:block;word-break:break-all}.error{background-color:#fcebeb;color:#cc0000;border:1px solid #ecc0c0}.success{background-color:#e5f6e8;color:#0a6b32;border:1px solid #b3d9c7}.warning{background-color:#fff3cd;color:#856404;border:1px solid #ffeeba}#logDownloadContainer{margin-top:15px;}.log-button{background-color:#6ac4a5;color:white;border:none;font-weight:700;}.log-button:hover{background-color:#4ca388;}
         #logDisplay {
@@ -14,18 +14,18 @@
             white-space: pre-wrap;
             font-family: monospace;
             font-size: 14px;
-            max-height: 400px; /* スクロールエリアを設けてクラッシュを予防 */
+            max-height: 400px; 
             overflow-y: scroll;
         }
     </style>
 </head>
 <body>
 
-    <h1>UltraBox JSON → MIDIコンバーター (v52.4 - パターン参照ロジックを強化)</h1>
+    <h1>UltraBox JSON → MIDIコンバーター (v53.0 - 診断ログ強化)</h1>
     <p>JSONファイルをアップロードすると、正確なMIDIファイル（.mid）を生成します。</p>
     
     <div class="message warning" style="display: block;">
-        <strong>【パターン参照強化 v52.4】</strong> パターンがグローバル配列、チャンネル固有配列、オブジェクト埋め込みのいずれの方法で参照されていても、正しく音符データを取得できるようにロジックを修正しました。
+        <strong>【デバッグ強化 v53.0】</strong> パターン取得に失敗した場合のログ出力（データ型、キーなど）をさらに詳細にしました。音符がない場合は、生成されたログファイルを共有してください。
     </div>
 
     <div class="controls">
@@ -44,7 +44,7 @@
 
     <script>
         // バージョン定数を定義
-        const CONVERTER_VERSION = "v52.4";
+        const CONVERTER_VERSION = "v53.0";
         const MAX_DETAIL_LOG_NOTES = 200; 
 
         const convertButton = document.getElementById('convertButton');
@@ -94,7 +94,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // カスタムコンバーターロジック (v52.4 - パターン参照ロジックを強化)
+        // カスタムコンバーターロジック (v53.0 - 診断ログ強化)
         // ----------------------------------------------------------------------
 
         const MIDI_TICKS_PER_BEAT = 24; 
@@ -140,25 +140,38 @@
             return [lsb, msb];
         }
 
-        // v52.4: パターン参照ロジックを強化
+        // v53.0: パターン参照ロジックを強化し、診断情報を詳細化
         function getPatternFromReference(rawPatternRef, channelPatterns, globalPatterns) {
-            let pattern = null;
             
+            // ログ情報を保持するためのオブジェクト
+            const diagnosticInfo = {
+                type: typeof rawPatternRef,
+                value: rawPatternRef,
+                keys: null,
+                searchOrder: []
+            };
+
             if (rawPatternRef === null || rawPatternRef === undefined) {
-                return null;
+                diagnosticInfo.status = "Failed: Null/Undefined Reference";
+                return { pattern: null, diagnosticInfo };
+            }
+
+            if (diagnosticInfo.type === 'object' && rawPatternRef !== null) {
+                diagnosticInfo.keys = Object.keys(rawPatternRef).join(', ') || 'N/A';
             }
 
             // Case 1: Pattern object is EMBEDDED DIRECTLY (e.g., sequence contains {notes: [...]})
-            if (typeof rawPatternRef === 'object' && Array.isArray(rawPatternRef.notes)) {
-                return rawPatternRef; 
+            if (diagnosticInfo.type === 'object' && Array.isArray(rawPatternRef.notes)) {
+                diagnosticInfo.status = "Success: Direct Object Embedding";
+                return { pattern: rawPatternRef, diagnosticInfo }; 
             }
             
             // Determine the ID to look up
             let patternIndex = -1;
-            if (typeof rawPatternRef === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
+            if (diagnosticInfo.type === 'number' && rawPatternRef >= 0 && Number.isInteger(rawPatternRef)) {
                 patternIndex = rawPatternRef; // Case 2: Simple numerical ID
-            } else if (typeof rawPatternRef === 'object' && rawPatternRef !== null) {
-                // Case 3: Object with an ID property (e.g., {pattern: 0} or {id: 0})
+            } else if (diagnosticInfo.type === 'object' && rawPatternRef !== null) {
+                // Case 3: Object with an ID property
                 if (typeof rawPatternRef.pattern === 'number' && rawPatternRef.pattern >= 0) {
                     patternIndex = rawPatternRef.pattern; 
                 } else if (typeof rawPatternRef.patternId === 'number' && rawPatternRef.patternId >= 0) {
@@ -169,32 +182,47 @@
             }
             
             if (patternIndex >= 0) {
+                // IDが取得できた場合、参照先のパターンを探す
+                
                 // 優先度1: チャンネル固有のパターン配列/マップから検索
                 if (channelPatterns) {
+                    diagnosticInfo.searchOrder.push(`Channel Patterns (ID: ${patternIndex})`);
+                    let pattern = null;
                     if (Array.isArray(channelPatterns)) {
                         pattern = channelPatterns[patternIndex];
                     } else if (typeof channelPatterns === 'object') {
                         pattern = channelPatterns[String(patternIndex)];
                     }
                     if (pattern && Array.isArray(pattern.notes)) {
-                        return pattern;
+                        diagnosticInfo.status = "Success: Channel Pattern";
+                        return { pattern, diagnosticInfo };
                     }
                 }
 
                 // 優先度2: グローバルパターン配列/マップから検索
                 if (globalPatterns) {
+                    diagnosticInfo.searchOrder.push(`Global Patterns (ID: ${patternIndex})`);
+                    let pattern = null;
                     if (Array.isArray(globalPatterns)) {
                         pattern = globalPatterns[patternIndex];
                     } else if (typeof globalPatterns === 'object') {
                         pattern = globalPatterns[String(patternIndex)];
                     }
                     if (pattern && Array.isArray(pattern.notes)) {
-                        return pattern;
+                        diagnosticInfo.status = "Success: Global Pattern";
+                        return { pattern, diagnosticInfo };
                     }
                 }
+                
+                // 検索失敗
+                diagnosticInfo.status = `Failed: ID ${patternIndex} found, but pattern data (with notes:[]) was missing in all sources.`;
+
+            } else {
+                // IDが見つからなかった場合
+                diagnosticInfo.status = "Failed: Could not extract valid pattern ID.";
             }
             
-            return null; 
+            return { pattern: null, diagnosticInfo }; 
         }
         
         function convertUltraBoxToMidi(ultraBoxData) {
@@ -210,15 +238,16 @@
                  throw new Error("データ構造エラー: チャンネルデータ ('channels') が見つからないか、空です。");
             }
             
-            const globalPatterns = ultraBoxData.patterns || {}; // グローバルパターン
+            const globalPatterns = ultraBoxData.patterns || {}; 
             
             let sequenceToLoop = ultraBoxData.sequence || []; 
             
             if (sequenceToLoop.length === 0) {
-                // sequenceがない場合、最初のチャンネルのsequenceまたはpatternsを使用する（フォールバック）
-                const firstChannelPatterns = channels[0].patterns;
+                // sequenceがない場合、最初のチャンネルのpatternsを使用する（フォールバック）
+                const firstChannelPatterns = channels[0]?.patterns;
                 if (firstChannelPatterns && Array.isArray(firstChannelPatterns) && firstChannelPatterns.length > 0) {
-                    sequenceToLoop = firstChannelPatterns.map((_, i) => i); // パターンインデックスをシーケンスとして使用
+                    // 全パターンがシーケンスに登場すると仮定
+                    sequenceToLoop = firstChannelPatterns.map((_, i) => i); 
                 }
             }
             
@@ -226,6 +255,7 @@
                  throw new Error("データ構造エラー: シーケンスデータ ('sequence') が見つからないか、空です。");
             }
             
+            // LoopBarsまたはsequenceの長さで処理小節数を決定
             const totalBars = Math.min(sequenceToLoop.length, ultraBoxData.loopBars || sequenceToLoop.length);
             sequenceToLoop = sequenceToLoop.slice(0, totalBars); 
             
@@ -243,6 +273,7 @@
             let noteCount = 0; 
             let skippedEvents = []; 
             let processedNotesLog = []; 
+            let totalBarChecks = 0;
 
             let logDetailsSummary = [
                 `コンバーターバージョン: ${CONVERTER_VERSION}`,
@@ -258,7 +289,6 @@
                 const ultraBoxChannel = channels[channelIndex];
                 const midiChannel = channelIndex % 16; 
                 
-                // チャンネル固有のパターン配列
                 const channelPatterns = ultraBoxChannel.patterns; 
 
                 const ultraBoxPresetId = ultraBoxChannel.instruments?.[0]?.preset;
@@ -271,36 +301,17 @@
                 let absoluteBarStartTick = 0; 
                 
                 // トラック初期化イベント
-                events.push({
-                    tick: 0, 
-                    type: MIDI_PITCH_BEND_CHANGE, 
-                    value1: PITCH_BEND_RESET_LSB, 
-                    value2: PITCH_BEND_RESET_MSB, 
-                    channel: midiChannel 
-                });
-                
-                events.push({
-                    tick: 0, 
-                    type: MIDI_PROGRAM_CHANGE, 
-                    value1: gmProgramNumber, 
-                    channel: midiChannel 
-                });
-
-                events.push({
-                    tick: 0, 
-                    type: MIDI_CONTROL_CHANGE, 
-                    value1: CC_VOLUME, 
-                    value2: 127, 
-                    channel: midiChannel 
-                });
+                events.push({ tick: 0, type: MIDI_PITCH_BEND_CHANGE, value1: PITCH_BEND_RESET_LSB, value2: PITCH_BEND_RESET_MSB, channel: midiChannel });
+                events.push({ tick: 0, type: MIDI_PROGRAM_CHANGE, value1: gmProgramNumber, channel: midiChannel });
+                events.push({ tick: 0, type: MIDI_CONTROL_CHANGE, value1: CC_VOLUME, value2: 127, channel: midiChannel });
                 // ----------------------------------------------------------------------
 
 
                 for (let barIndex = 0; barIndex < totalBars; barIndex++) {
+                    totalBarChecks++;
                     
                     const rawPatternRef = sequenceToLoop[barIndex]; 
-                    // v52.4: チャンネルパターンとグローバルパターンの両方をチェック
-                    const pattern = getPatternFromReference(rawPatternRef, channelPatterns, globalPatterns);
+                    const { pattern, diagnosticInfo } = getPatternFromReference(rawPatternRef, channelPatterns, globalPatterns);
 
                     if (pattern) {
                         
@@ -316,6 +327,7 @@
                                 const pitches = (Array.isArray(note.pitches) && note.pitches.length > 0) 
                                     ? note.pitches 
                                     : (Array.isArray(note.pitch) ? note.pitch : [note.pitch]); 
+                                
                                 if (!pitches || pitches.length === 0) {
                                     skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}, Note${noteIndex}] 理由: 音高データ(pitches/pitch)が見つからない`);
                                     continue;
@@ -399,7 +411,6 @@
                                         );
                                     }
                                     
-                                    // Note-Offは常に生成（Note-Onがスキップされても、このNote-Offが最終的な音の終了を定義する）
                                     events.push({
                                         tick: noteOffTick, 
                                         type: MIDI_NOTE_OFF, 
@@ -453,18 +464,21 @@
                              skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 参照されたパターンは有効ですが、音符データがありません (notes: [])`);
                         }
                     } else {
-                         let rawDataString = "";
-                        if (rawPatternRef !== null && rawPatternRef !== undefined) {
-                            if (typeof rawPatternRef === 'object') {
-                                rawDataString = `参照データ型: ${typeof rawPatternRef}, キー: ${Object.keys(rawPatternRef).join(', ')}`;
-                            } else {
-                                rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
-                            }
-                        } else {
-                             rawDataString = `参照データ型: ${typeof rawPatternRef}, 値: ${rawPatternRef}`;
+                        // パターン取得失敗時の詳細診断情報をログに出力
+                        let rawValue = diagnosticInfo.value;
+                        if (typeof rawValue === 'object' && rawValue !== null) {
+                            // オブジェクトの場合は、内容が長くなるのを防ぐためJSON文字列化
+                            rawValue = JSON.stringify(rawValue).substring(0, 200) + (JSON.stringify(rawValue).length > 200 ? '...' : ''); 
                         }
                         
-                        skippedEvents.push(`[Ch${channelIndex+1} Bar${barIndex+1}] 理由: 有効なパターンデータが見つからない (データ構造不正)\n>> 診断情報:\n${rawDataString}`);
+                        let logMessage = `[Ch${channelIndex+1} Bar${barIndex+1}] 理由: パターンデータの取得に失敗 (ステータス: ${diagnosticInfo.status})`;
+                        logMessage += `\n>> 診断情報:`;
+                        logMessage += `\n参照データ型: ${diagnosticInfo.type}`;
+                        logMessage += `\n値の概略: ${rawValue}`;
+                        logMessage += `\nオブジェクトキー: ${diagnosticInfo.keys || 'N/A'}`;
+                        logMessage += `\n検索順序: ${diagnosticInfo.searchOrder.join(' -> ') || 'N/A'}`;
+                        
+                        skippedEvents.push(logMessage);
                     }
                     absoluteBarStartTick += midiTicksPerBar; 
                 }
@@ -576,7 +590,7 @@
         }
 
         // ----------------------------------------------------------------------
-        // イベントハンドラー (v52.4)
+        // イベントハンドラー (v53.0)
         // ----------------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -637,7 +651,7 @@
                 try {
                     const result = convertUltraBoxToMidi(convertButton.ultraBoxData);
                     
-                    const midiFileName = baseFileName + '_fixed_multitrack_v52_4.mid';
+                    const midiFileName = baseFileName + '_fixed_multitrack_v53_0.mid';
                     
                     // 1. MIDIファイルのダウンロード (自動)
                     downloadFile(result.midiBuffer, midiFileName, "audio/midi");
@@ -645,8 +659,8 @@
                     // 2. ログファイルのコンテンツ作成
                     const fileSize = result.midiBuffer.byteLength;
                     let logContent = `${result.summary}\n\n`;
-                    logContent += `--- スキップ・空小節 詳細ログ (全 ${result.skippedEvents.length}個) ---\n`;
-                    logContent += result.skippedEvents.length > 0 ? result.skippedEvents.join('\n') : "【成功】パターン参照エラーや処理不能な音符データは検出されませんでした。";
+                    logContent += `--- スキップ・パターン取得失敗 詳細ログ (全 ${result.skippedEvents.length}個) ---\n`;
+                    logContent += result.skippedEvents.length > 0 ? result.skippedEvents.join('\n\n') : "【成功】パターン参照エラーや処理不能な音符データは検出されませんでした。";
                     
                     logContent += `\n\n--- 処理された音符 詳細ログ (全 ${result.noteCount}個) ---\n`;
                     logContent += `MIDIファイルサイズ: ${fileSize} バイト\n`;
@@ -656,9 +670,9 @@
                         if (result.noteCount <= MAX_DETAIL_LOG_NOTES) {
                             logContent += `✅ ノート数が${MAX_DETAIL_LOG_NOTES}個以下のため、全詳細ログを出力します。\n`;
                             logContent += `引き続き音が出ない場合は、このログを全てコピーしてご連絡ください。\n`;
-                            logContent += result.processedNotesLog.join('\n'); // 完全に結合
+                            logContent += result.processedNotesLog.join('\n'); 
                         } else { 
-                            logContent += `⚠️ ノート総数が${MAX_DETAIL_LOG_NOTES}個を超えている (${result.noteCount}個) ため、ログの長大化による問題を避けるため、**詳細ログの出力は省略**しました。\n`;
+                            logContent += `⚠️ ノート総数が${result.noteCount}個のため、詳細ログの出力は省略しました。\n`;
                             logContent += `【重要】それでも音が出ない場合は、**JSONファイルを再度アップロード**してください。`;
                         }
                     } else {
